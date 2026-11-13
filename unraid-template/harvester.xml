@@ -18,6 +18,8 @@
 
   <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/harvester" Mode="rw" Description="Persistent storage for configuration, cache, and logs." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/harvester</Config>
 
+  <Config Name="Media Library" Target="/mnt/user" Default="/mnt/user" Mode="rw" Description="Access to your Unraid user shares (Plex libraries, FTP inbox, MKV destinations, etc.) — must match whatever paths are referenced in Config > FTP/MKV/Spotify settings." Type="Path" Display="always" Required="true" Mask="false">/mnt/user</Config>
+
   <Config Name="SECRET_KEY" Target="SECRET_KEY" Default="" Mode="" Description="Flask secret key for session security. If left empty, a key is auto-generated and saved to /config/secret_key.txt on first start." Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
   <Config Name="Timezone" Target="TZ" Default="America/Montreal" Mode="" Description="Container timezone (e.g. America/New_York, Europe/Paris)." Type="Variable" Display="always" Required="false" Mask="false">America/Montreal</Config>
