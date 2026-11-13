@@ -1,0 +1,173 @@
+# Harvester
+
+**Harvester** is a self-hosted web application that compares your local Plex library against shared remote servers, indexes FTP sources for automatic downloading, and manages MKV audio tracks — all from a clean web interface.
+
+[![Docker Pulls](https://img.shields.io/docker/pulls/misterkqc/harvester)](https://hub.docker.com/r/misterkqc/harvester)
+[![Docker Image Size](https://img.shields.io/docker/image-size/misterkqc/harvester/latest)](https://hub.docker.com/r/misterkqc/harvester)
+[![GitHub release](https://img.shields.io/github/v/release/MisterK-Qc/harvester)](https://github.com/MisterK-Qc/harvester/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+---
+
+## Features
+
+- **Library Comparison** — Compare movies and TV shows between your local Plex server and any shared remote server, with smart cross-language title matching (e.g. EN vs FR titles)
+- **FTP Integration** — Index multiple FTP servers, queue downloads automatically, and route content to the right Plex library folder
+- **MKV Processing** — Remux video files with MKVToolNix to set the correct default audio track and fix language metadata per track
+- **Snapshots** — Save library snapshots and diff them over time to track additions and removals
+- **Multilingual** — Full French and English interface
+- **Real-time Logs** — Live log viewer with SSE streaming and configurable retention
+- **Auto-download scheduling** — Time-windowed automatic FTP downloads with daily limits and skip days
+
+---
+
+## Quick Start
+
+### Docker Compose
+
+```yaml
+services:
+  harvester:
+    image: misterkqc/harvester:latest
+    container_name: harvester
+    ports:
+      - "5000:5000"
+    volumes:
+      - /mnt/user/appdata/harvester:/config
+    environment:
+      TZ: America/Montreal
+      SECRET_KEY: "your-random-secret-key"
+    restart: unless-stopped
+```
+
+Then open **http://YOUR_IP:5000** in your browser.
+
+### Docker Run
+
+```bash
+docker run -d \
+  --name harvester \
+  -p 5000:5000 \
+  -e SECRET_KEY="your-random-secret-key" \
+  -e TZ="America/Montreal" \
+  -v /mnt/user/appdata/harvester:/config \
+  --restart unless-stopped \
+  misterkqc/harvester:latest
+```
+
+---
+
+## Unraid Installation
+
+### Option 1 — Community Applications (recommended)
+
+1. In Unraid, open **Apps** (Community Applications)
+2. Search for **Harvester**
+3. Click Install — all fields are pre-filled, just enter your `SECRET_KEY`
+
+### Option 2 — Template URL
+
+1. In Unraid → **Docker** → **Add Container**
+2. At the very **top of the page**, find the **"Template URL"** field
+3. Paste the URL below and click the **arrow button** next to it:
+   ```
+   https://raw.githubusercontent.com/MisterK-Qc/harvester/main/unraid-template/harvester.xml
+   ```
+4. All fields pre-fill automatically — enter your `SECRET_KEY` and click **Apply**
+
+### Option 3 — Via SSH (saves template permanently)
+
+Run this once in your Unraid terminal:
+```bash
+wget -O /boot/config/plugins/dockerMan/templates-user/harvester.xml \
+  https://raw.githubusercontent.com/MisterK-Qc/harvester/main/unraid-template/harvester.xml
+```
+Then: **Docker → Add Container** → select **Harvester** under *User Templates*
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SECRET_KEY` | No | *(auto-generated)* | Flask secret key used to sign and encrypt session cookies. If not set, a key is auto-generated on first start and saved to `/config/secret_key.txt`. |
+| `TZ` | No | `America/Montreal` | Container timezone |
+| `HARVESTER_CONFIG_DIR` | No | `/config` | Internal config directory (do not change) |
+
+---
+
+## Volumes
+
+| Container path | Description |
+|---|---|
+| `/config` | **Required.** Persistent storage for config, cache, and logs. |
+
+---
+
+## First Launch
+
+1. Open **http://YOUR_IP:5000**
+2. Log in with your **Plex account** — the token is retrieved automatically
+3. Select the **remote server** to compare against
+4. Go to **Config (⚙️)** to set up:
+   - TMDB API key *(optional)*
+   - FTP servers *(optional)*
+   - Default audio language for MKV processing
+   - Interface language (French / English)
+
+---
+
+## Configuration
+
+All settings are managed through the web interface under **Config**. The configuration is stored in `/config/config.json`.
+
+See [config.example.json](config.example.json) for a reference of all available options.
+
+---
+
+## MKV Processing
+
+MKVToolNix is **included in the Docker image** — no separate installation required. The default binary path is `/usr/bin`.
+
+Features:
+- Auto-detect audio track languages from file metadata
+- Set default audio track based on your preferred language
+- Override language per track directly from the UI
+- Add custom language codes to the dropdown list
+
+---
+
+## Architecture
+
+Built with:
+- **Python 3.12** + **Flask** — Web framework
+- **PlexAPI** — Plex server communication
+- **Gunicorn** — WSGI server (1 worker, 4 threads)
+- **MKVToolNix** — MKV remuxing and metadata editing
+
+```
+app/
+  routes/         Flask blueprints (dashboard, config, FTP, MKV, auth)
+  services/       Business logic (Plex, FTP, MKV, cache, config)
+  templates/      Jinja2 HTML templates
+  languages/      i18n files (fr.json, en.json)
+  static/         CSS, favicon
+```
+
+---
+
+## Building from Source
+
+```bash
+git clone https://github.com/MisterK-Qc/harvester.git
+cd harvester
+docker build -t harvester:latest .
+```
+
+> Code changes in `app/` and `run.py` only require a container restart when using bind mounts — no rebuild needed.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)

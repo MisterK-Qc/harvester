@@ -1,0 +1,14 @@
+services:
+  harvester:
+    image: misterkqc/harvester:latest
+    container_name: harvester
+    ports:
+      - "5000:5000"
+    volumes:
+      - /mnt/user/appdata/harvester:/config
+    environment:
+      TZ: ${TZ:-America/Montreal}
+      PYTHONUNBUFFERED: "1"
+      HARVESTER_CONFIG_DIR: /config
+      SECRET_KEY: ${SECRET_KEY}
+    restart: unless-stopped

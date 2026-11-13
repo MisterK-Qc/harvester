@@ -1,0 +1,16 @@
+services:
+  harvester:
+    container_name: harvester
+    build:
+      context: .
+    image: harvester:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./config:/config
+      - /mnt:/mnt
+    environment:
+      TZ: ${TZ:-America/Montreal}
+      PYTHONUNBUFFERED: "1"
+      HARVESTER_CONFIG_DIR: /config
+    restart: unless-stopped

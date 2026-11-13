@@ -1,0 +1,1066 @@
+import os
+import re
+import json
+import logging
+import shutil
+import subprocess
+import time
+import threading as _threading
+from typing import Optional, Tuple, List, Dict
+from flask import current_app
+from app.config_paths import MKV_LANGUAGES_FILE as _MKV_LANGUAGES_FILE
+
+_lang_lock = _threading.Lock()
+_BASE_LANGUAGES = ["fr", "fr-CA", "en", "en-US", "es", "pt", "pt-BR", "de", "it", "ja", "ko", "zh", "und"]
+
+
+def load_mkv_languages() -> list:
+    with _lang_lock:
+        try:
+            if os.path.exists(_MKV_LANGUAGES_FILE):
+                with open(_MKV_LANGUAGES_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    seen = set(_BASE_LANGUAGES)
+                    result = list(_BASE_LANGUAGES)
+                    for lang in data:
+                        if lang and lang not in seen:
+                            result.append(lang)
+                            seen.add(lang)
+                    return sorted(result, key=str.lower)
+        except Exception:
+            pass
+        return sorted(_BASE_LANGUAGES, key=str.lower)
+
+
+def register_mkv_languages(new_codes: list) -> None:
+    with _lang_lock:
+        existing = []
+        try:
+            if os.path.exists(_MKV_LANGUAGES_FILE):
+                with open(_MKV_LANGUAGES_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    existing = [c for c in data if c]
+        except Exception:
+            pass
+        seen = set(_BASE_LANGUAGES) | set(existing)
+        added = False
+        for code in new_codes:
+            if code and code not in seen:
+                existing.append(code)
+                seen.add(code)
+                added = True
+        if added:
+            try:
+                with open(_MKV_LANGUAGES_FILE, "w", encoding="utf-8") as f:
+                    json.dump(existing, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+
+VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov", ".mpeg")
+
+# StreamFab service name → scene abbreviation (most specific patterns first)
+_SERVICE_TAG_MAP = [
+    (re.compile(r'(?i)Amazon[.\s]?Prime[.\s]?Video'), 'AMZN'),
+    (re.compile(r'(?i)Amazon[.\s]?Prime'),            'AMZN'),
+    (re.compile(r'(?i)Prime[.\s]?Video'),              'AMZN'),
+    (re.compile(r'(?i)(?<!\w)Amazon(?!\w)'),           'AMZN'),
+    (re.compile(r'(?i)(?<!\w)Netflix(?!\w)'),          'NF'),
+    (re.compile(r'(?i)Disney\+'),                      'DSNP'),
+    (re.compile(r'(?i)Disney[.\s]?Plus'),              'DSNP'),
+    (re.compile(r'(?i)HBO[.\s]?Max'),                  'HMAX'),
+    (re.compile(r'(?i)(?<!\w)HBO(?!\w)'),              'HMAX'),
+    (re.compile(r'(?i)Apple[.\s]?TV\+'),               'ATVP'),
+    (re.compile(r'(?i)Apple[.\s]?TV'),                 'ATVP'),
+    (re.compile(r'(?i)(?<!\w)Hulu(?!\w)'),             'HULU'),
+    (re.compile(r'(?i)Paramount\+'),                   'PMTP'),
+    (re.compile(r'(?i)Paramount[.\s]?Plus'),           'PMTP'),
+    (re.compile(r'(?i)(?<!\w)Peacock(?!\w)'),          'PCOK'),
+    (re.compile(r'(?i)(?<!\w)Crave(?!\w)'),            'CRAV'),
+    (re.compile(r'(?i)Club[.\s]?Illico'),              'ILCO'),
+    (re.compile(r'(?i)(?<!\w)Illico(?!\w)'),           'ILCO'),
+    (re.compile(r'(?i)(?<!\w)Tubi(?!\w)'),             'TUBI'),
+    (re.compile(r'(?i)(?<!\w)Mubi(?!\w)'),             'MUBI'),
+    (re.compile(r'(?i)(?<!\w)Crunchyroll(?!\w)'),      'CR'),
+    (re.compile(r'(?i)(?<!\w)Funimation(?!\w)'),       'FUNI'),
+    (re.compile(r'(?i)(?<!\w)Showtime(?!\w)'),         'SHO'),
+    (re.compile(r'(?i)(?<!\w)Starz(?!\w)'),            'STRZ'),
+    (re.compile(r'(?i)(?<!\w)Noovo(?!\w)'),            'NOOVO'),
+    (re.compile(r'(?i)Tou[.\s]?TV'),                   'TOUTV'),
+]
+
+
+def normalize_service_tag(name: str) -> str:
+    """Replace verbose streaming service names with scene abbreviations in a filename stem."""
+    for pattern, tag in _SERVICE_TAG_MAP:
+        name = pattern.sub(tag, name)
+    return name
+
+class MKVCancelledError(Exception):
+    pass
+
+def fix_permissions(path: str):
+    try:
+        subprocess.run(["chmod", "777", path], check=False)
+        subprocess.run(["chown", "nobody:users", path], check=False)
+    except Exception as e:
+        print(f"[PERMS] erreur sur {path}: {e}")
+
+
+_mkv_log = logging.getLogger(__name__)
+
+
+def _resolve_series_folder_name(dst_dir: str, series_name: str, stem: str) -> str:
+    """
+    Détermine le nom de dossier série "Nom (Année)" à utiliser. Priorité :
+    1) le nom a déjà une année (Plex ou détection antérieure) → inchangé ;
+    2) un dossier "Nom (Année)" existe déjà sous dst_dir → le réutiliser, pour que
+       toutes les saisons tombent dans le même dossier, quelle que soit l'année
+       embarquée dans le nom du fichier de la saison en cours (souvent l'année de
+       diffusion de la saison, pas celle de la série) ;
+    3) sinon, résoudre l'année de première diffusion via TMDB ;
+    4) à défaut (pas de clé TMDB, série introuvable...), repli sur l'année trouvée
+       dans le nom du fichier source.
+    """
+    if re.search(r'\(\d{4}\)', series_name):
+        return series_name
+
+    try:
+        for entry in os.listdir(dst_dir):
+            if re.match(re.escape(series_name) + r'\s*\(\d{4}\)$', entry):
+                return entry
+    except OSError:
+        pass
+
+    try:
+        from app.services.config_service import load_config
+        from app.services import rename_scene_service as _rss
+
+        cfg = load_config()
+        tmdb_key = cfg.get("TMDB_API_KEY", "")
+        if tmdb_key:
+            _rss.TMDB_API_KEY = tmdb_key
+            tmdb_id, _ = _rss.tmdb_search(series_name, None, is_series=True)
+            if tmdb_id:
+                year = _rss._fetch_tmdb_year(tmdb_id, "tv")
+                if year:
+                    return f"{series_name} ({year})"
+    except Exception as e:
+        _mkv_log.warning("[series folder] TMDB year lookup failed: %s", e)
+
+    _yr = re.search(r'\((\d{4})\)', stem)
+    if _yr:
+        return f"{series_name} ({_yr.group(1)})"
+    return series_name
+
+
+def _apply_scene_name(src_file: str, dst_file: str, team: str = "MKQC") -> str:
+    """
+    Rename dst_file using the scene naming convention from rename_scene_service.
+    Uses MediaInfo on the remuxed output and service detection on the source path.
+    Returns the final file path.
+    """
+    try:
+        from app.services import rename_scene_service as _rss
+
+        src_stem = os.path.splitext(os.path.basename(src_file))[0]
+        dst_dir  = os.path.dirname(dst_file)
+
+        # Parse source filename → title, SxxExx, ep_title, year, edition…
+        title, ep_tag, year, ep_title, edition, subtitle, team_name = \
+            _rss.parse_original_name(src_stem)
+
+        # MediaInfo on the remuxed file (real codec/resolution after remux)
+        mi = _rss.get_media_info(dst_file)
+        if not mi:
+            _mkv_log.warning("[scene rename] MediaInfo unavailable for %s",
+                             os.path.basename(dst_file))
+            return dst_file
+
+        resolution     = mi.get("resolution")     or "1080p"
+        video_codec    = mi.get("video_codec")    or "H265"
+        audio_codec    = mi.get("audio_codec")    or "EAC3"
+        audio_channels = mi.get("audio_channels") or "5.1"
+        hdr            = mi.get("hdr")
+
+        # Detect streaming service from the source path (has original StreamFab tags)
+        service = _rss.detect_service_from_name(src_file, mi)
+        source  = None
+        if service:
+            source = "WEBRip" if service in ("YT", "TUBI", "PLUTO", "GEM", "CTV") \
+                     else "WEB-DL"
+
+        # Infer from codec/hdr when service unknown
+        if not service and not source:
+            inf_svc, inf_src, confidence, _, _ = _rss.infer_from_codec(mi)
+            if confidence in ("certain", "high", "medium"):
+                service, source = inf_svc, inf_src
+
+        if not source:
+            source = "WEB-DL"
+
+        lang_tag = _rss.detect_audio_language_tag(
+            mi.get("audio_tracks", []), mi.get("sub_tracks", [])
+        )
+
+        new_stem = _rss.build_scene_name(
+            title=title, episode_tag=ep_tag, ep_title=ep_title,
+            resolution=resolution, service=service, source=source,
+            video_codec=video_codec, audio_codec=audio_codec,
+            audio_channels=audio_channels, hdr=hdr, team=None,
+            lang_tag=lang_tag, edition=edition, subtitle=subtitle,
+            team_name=(team or team_name),
+        )
+        if len(new_stem) > 180:
+            new_stem = new_stem[:180].rstrip()
+
+        new_filename = to_safe_filename(new_stem) + ".mkv"
+        new_path     = os.path.join(dst_dir, new_filename)
+
+        if os.path.normpath(dst_file) != os.path.normpath(new_path):
+            if os.path.exists(new_path):
+                _mkv_log.warning("[scene rename] Target exists, skipping: %s", new_filename)
+            else:
+                os.rename(dst_file, new_path)
+                fix_permissions(new_path)
+                _mkv_log.info("[scene rename] %s → %s",
+                              os.path.basename(dst_file), new_filename)
+                dst_file = new_path
+
+        return dst_file
+
+    except Exception as e:
+        _mkv_log.warning("[scene rename] Failed: %s", e, exc_info=True)
+        return dst_file
+
+
+def get_mkvtoolnix_binaries(config) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Retourne les chemins vers mkvmerge et mkvpropedit.
+    Compatible Windows et Docker/Linux.
+    """
+    custom_bin = str(config.get("MKVTOOLNIX_BIN") or "").strip()
+
+    def _is_exec(path: str) -> bool:
+        return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+    candidates = []
+
+    if os.name == "nt":
+        if custom_bin:
+            candidates.append((
+                os.path.join(custom_bin, "mkvmerge.exe"),
+                os.path.join(custom_bin, "mkvpropedit.exe"),
+            ))
+
+        candidates.extend([
+            (
+                r"C:\Program Files\MKVToolNix\mkvmerge.exe",
+                r"C:\Program Files\MKVToolNix\mkvpropedit.exe",
+            ),
+            (
+                r"C:\Program Files (x86)\MKVToolNix\mkvmerge.exe",
+                r"C:\Program Files (x86)\MKVToolNix\mkvpropedit.exe",
+            ),
+        ])
+
+    else:
+        if custom_bin:
+            candidates.append((
+                os.path.join(custom_bin, "mkvmerge"),
+                os.path.join(custom_bin, "mkvpropedit"),
+            ))
+
+        candidates.extend([
+            ("/usr/bin/mkvmerge", "/usr/bin/mkvpropedit"),
+            ("/usr/local/bin/mkvmerge", "/usr/local/bin/mkvpropedit"),
+            ("/bin/mkvmerge", "/bin/mkvpropedit"),
+        ])
+
+    for mkvmerge, mkvpropedit in candidates:
+        if _is_exec(mkvmerge) and _is_exec(mkvpropedit):
+            return mkvmerge, mkvpropedit
+
+    which_merge = shutil.which("mkvmerge")
+    which_propedit = shutil.which("mkvpropedit")
+
+    if which_merge and which_propedit:
+        return which_merge, which_propedit
+
+    return None, None
+
+
+def is_video_file(path: str) -> bool:
+    return path.lower().endswith(VIDEO_EXTS)
+
+
+def is_unc_path(path: str) -> bool:
+    return path.startswith("\\\\") or path.startswith("//")
+
+
+def to_safe_filename(name: str) -> str:
+    # Colon → spaced dash (cleaner than underscore, readable in Plex)
+    name = re.sub(r'\s*:\s*', ' - ', name)
+    # Remove remaining Windows-forbidden chars (accents are kept)
+    name = re.sub(r'[<>"/\\|?*]', '', name)
+    return name.strip()
+
+
+def to_win32_safe_path(path: str) -> str:
+    if os.name == "nt":
+        if path.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + path[2:]
+        if not path.startswith("\\\\?\\"):
+            return "\\\\?\\" + path
+    return path
+
+
+def extract_languages(file_path: str, mkvmerge_path: str) -> List[Dict]:
+    """
+    Retourne une liste de dicts {track_index, lang_code, label} pour les pistes audio.
+    track_index est 1-based (pour mkvpropedit track:aN).
+    """
+    if not mkvmerge_path:
+        return [{"track_index": 1, "lang_code": "erreur", "label": "Erreur: MKVToolNix introuvable"}]
+
+    def _is_fr_ca_name(name_l: str) -> bool:
+        return (
+            "vfq" in name_l or "quebec" in name_l or "québec" in name_l or
+            " canada" in name_l or "(qc" in name_l or "canadien" in name_l or
+            "french (canada)" in name_l or "français (canada)" in name_l
+        )
+
+    iso639_2_to_1 = {
+        "eng": "en",
+        "fre": "fr", "fra": "fr",
+        "ger": "de", "deu": "de",
+        "spa": "es",
+        "por": "pt",
+        "ita": "it",
+        "jpn": "ja",
+        "chi": "zh", "zho": "zh",
+    }
+
+    try:
+        safe_path = to_win32_safe_path(file_path)
+        result = subprocess.run(
+            [mkvmerge_path, "-J", safe_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            return [{"track_index": 1, "lang_code": "erreur", "label": "Erreur MKVToolNix"}]
+
+        metadata = json.loads(result.stdout)
+        audio_tracks = [t for t in metadata.get("tracks", []) if t.get("type") == "audio"]
+        langs = []
+        audio_idx = 1  # 1-based for mkvpropedit track:aN
+
+        for track in audio_tracks:
+            props = track.get("properties", {}) or {}
+            ietf = (props.get("language_ietf") or "").strip()
+            raw = (props.get("language") or "").strip()
+            name = (props.get("track_name") or "").strip()
+
+            base = ietf or raw or "und"
+            base_l = base.lower()
+            name_l = name.lower()
+
+            if len(base_l) == 3 and base_l in iso639_2_to_1:
+                base_l = iso639_2_to_1[base_l]
+
+            if _is_fr_ca_name(name_l) or base_l in ("fr-ca", "fr_ca"):
+                base_l = "fr-ca"
+
+            if base_l.startswith("en"):
+                base_l = "en"
+            if base_l.startswith("fr") and base_l not in ("fr", "fr-ca"):
+                base_l = "fr"
+
+            display = f"{base_l} ({name})" if name else base_l
+            langs.append({"track_index": audio_idx, "lang_code": base_l, "label": display})
+            audio_idx += 1
+
+        register_mkv_languages([e["lang_code"] for e in langs])
+        return langs
+
+    except Exception:
+        return []
+
+
+def get_mkv_status(languages: List[Dict]) -> str:
+    if not languages or any("erreur" in e.get("lang_code", "").lower() for e in languages):
+        return "Erreur"
+    codes = [e.get("lang_code", "").lower() for e in languages]
+    if any(c == "fr-ca" for c in codes):
+        return "OK"
+    if any(c.startswith("fr") and c != "fr-ca" for c in codes):
+        return "À traiter"
+    return "Pas de FR"
+
+
+def find_source_path(relative_path: str, source_dirs: list[str]):
+    for base in source_dirs:
+        attempt = os.path.join(base, relative_path)
+        if os.path.exists(attempt):
+            return attempt, base
+    return None, None
+
+
+def collect_video_files(src_path: str) -> List[str]:
+    files_to_process = []
+
+    if os.path.isfile(src_path):
+        if is_video_file(src_path):
+            files_to_process = [src_path]
+
+    elif os.path.isdir(src_path):
+        for root, dirs, files in os.walk(src_path):
+            dirs[:] = [d for d in dirs if d != ".grab"]
+            for f in files:
+                if is_video_file(f):
+                    files_to_process.append(os.path.join(root, f))
+
+    return files_to_process
+
+
+SEASON_DIR_RE = re.compile(r'^(?:s\d{1,3}|season\s*\d{1,3}|saison\s*\d{1,3})$', re.IGNORECASE)
+EP_PATTERNS = [
+    re.compile(r'[Ss](\d{1,3})[ ._-]?[Ee](\d{1,3})'),
+    re.compile(r'(\d{1,3})x(\d{1,3})'),
+    re.compile(r'(?:episode|épisode|ep)[ ._-]?(\d{1,3})', re.IGNORECASE),
+]
+PLATFORM_HINTS = {
+    'netflix', 'disney+', 'disneyplus', 'prime video', 'amazon', 'primevideo', 'appletv', 'apple tv',
+    'hbo', 'paramount+', 'paramountplus', 'tubi', 'clubillico', 'stacktv', 'teletoon+', 'plex', 'sync',
+    'drm mdp', 'drmmdp'
+}
+
+
+def _is_season_dir(name: str) -> bool:
+    n = (name or '').strip().lower().replace('_', ' ')
+    return bool(SEASON_DIR_RE.match(n))
+
+
+_SEASON_DIR_NUM_RE = re.compile(r'^(?:s|season\s*|saison\s*)(\d{1,3})$', re.IGNORECASE)
+
+
+def _season_number_from_dir(name: str) -> Optional[int]:
+    n = (name or '').strip().lower().replace('_', ' ')
+    m = _SEASON_DIR_NUM_RE.match(n)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _clean_series_name(name: str) -> str:
+    if not name:
+        return ''
+    name = re.sub(r'\s*\(\s*\d{4}\s*\)\s*$', '', name).strip()
+    name = name.replace('.', ' ').strip(' -_')
+    return name
+
+
+def infer_series_name_from_rel(rel_path: str) -> Optional[str]:
+    parts = [p for p in rel_path.split(os.sep) if p]
+    if not parts:
+        return None
+
+    dirs = parts[:-1]
+
+    for i in range(len(dirs) - 1, -1, -1):
+        if _is_season_dir(dirs[i]) and i > 0:
+            candidate = _clean_series_name(dirs[i - 1])
+            if candidate:
+                return candidate
+
+    for i in range(len(dirs) - 1, -1, -1):
+        d = (dirs[i] or '').strip()
+        dlow = d.lower()
+        if d and (dlow not in PLATFORM_HINTS) and not _is_season_dir(d):
+            candidate = _clean_series_name(d)
+            if candidate:
+                return candidate
+
+    fname = parts[-1]
+    for p in EP_PATTERNS:
+        m = p.search(fname)
+        if m:
+            head = fname[:m.start()]
+            candidate = _clean_series_name(head)
+            if candidate:
+                return candidate
+
+    return None
+
+
+def parse_episode_info(filename: str) -> Tuple[Optional[int], Optional[int], str]:
+    base = os.path.splitext(os.path.basename(filename))[0]
+
+    for p in EP_PATTERNS:
+        m = p.search(base)
+        if m:
+            if len(m.groups()) >= 2:
+                season = int(m.group(1))
+                episode = int(m.group(2))
+                title = base[m.end():].strip(" -._")
+                return season, episode, title
+            else:
+                episode = int(m.group(1))
+                title = base[m.end():].strip(" -._")
+                return None, episode, title
+
+    return None, None, base
+
+# ── Edition detection ────────────────────────────────────────────────────────
+# Multi-word patterns first (most specific), then single-word
+_EDITION_PATTERNS: List[Tuple] = [
+    (re.compile(r"(?i)\bUltimate[\s._-]+Director[s]?[\s._-]*'?s?[\s._-]*Cut\b"), "Ultimate Director's Cut"),
+    (re.compile(r"(?i)\bUnrated[\s._-]+(?:Director[s]?[\s._-]*'?s?[\s._-]*Cut|DC)\b"),  "Unrated Director's Cut"),
+    (re.compile(r"(?i)\bUnrated[\s._-]+Producer[s]?[\s._-]*'?s?[\s._-]*Cut\b"),          "Unrated Producer's Cut"),
+    (re.compile(r"(?i)\bDirector[s]?[\s._-]*'?s?[\s._-]*Cut\b"),                         "Director's Cut"),
+    (re.compile(r"(?i)\bExtended[\s._-]+(?:Cut|Edition|Version|Remaster(?:ed)?)\b"),     "Extended Edition"),
+    (re.compile(r"(?i)\bTheatrical[\s._-]+(?:Cut|Edition|Version)\b"),                   "Theatrical Edition"),
+    (re.compile(r"(?i)\bSpecial[\s._-]+Edition\b"),                                      "Special Edition"),
+    (re.compile(r"(?i)\bUltimate[\s._-]+Edition\b"),                                     "Ultimate Edition"),
+    (re.compile(r"(?i)\bAnniversary[\s._-]+Edition\b"),                                  "Anniversary Edition"),
+    (re.compile(r"(?i)\bFinal[\s._-]+Cut\b"),                                            "Final Cut"),
+    (re.compile(r"(?i)\bMinus[\s._-]+Colou?r\b"),                                        "Minus Color"),
+    (re.compile(r"(?i)\bFan[\s._-]*Edit\b"),                                             "Fan Edit"),
+    (re.compile(r"(?i)\bInternational[\s._-]+(?:Cut|Version)\b"),                        "International Cut"),
+    (re.compile(r"(?i)\bExtended\b"),                                                    "Extended Edition"),
+    (re.compile(r"(?i)\bTheatrical\b"),                                                  "Theatrical Edition"),
+    (re.compile(r"(?i)\bUnrated\b"),                                                     "Unrated"),
+    (re.compile(r"(?i)\bRemaster(?:ed)?\b"),                                             "Remastered"),
+    (re.compile(r"(?i)\bRedux\b"),                                                       "Redux"),
+    (re.compile(r"(?i)\bUncut\b"),                                                       "Uncut"),
+    (re.compile(r"(?i)\bIMAX\b"),                                                        "IMAX"),
+    (re.compile(r"(?i)\bColorize[d]?\b"),                                                "Colorized"),
+]
+
+# Scene-release technical tokens — stop title extraction here
+_SCENE_STOP_RE = re.compile(
+    r"(?i)\b("
+    r"2160p|4K|1080p|720p|480p|576p|"
+    r"WEB[.\-]?DL|WEBRip|WEB|BluRay|BDRip|BRRip|DVDRip|DVDScr|HDRip|Remux|HDTV|"
+    r"x264|x265|h264|h265|HEVC|AVC|AV1|VP9|"
+    r"AAC|AC3|DTS|DD5\.1|DDP5\.1|EAC3|Atmos|TrueHD|"
+    r"FRENCH|VFF|VFQ|VF2|MULTI|TRUEFRENCH|SUBFRENCH|"
+    r"PROPER|REPACK|COMPLETE|DUBBED|"
+    r"HDR10?|SDR|DV|"
+    r"AMZN|NF|DSNP|ATVP|HMAX|HULU|PMTP|PCOK|CRAV|ILCO|TUBI|MUBI|NOOVO|TOUTV|"
+    r"Netflix|Amazon|Disney\+|AppleTV|HBO"
+    r")\b"
+)
+
+
+def _extract_edition(stem: str) -> Tuple[str, str]:
+    """
+    Detect and extract edition info from a filename stem.
+    Checks bracketed editions first [Director's Cut], then known scene keywords.
+    Returns (stem_without_edition, edition_name).
+    edition_name is an empty string when no edition is found.
+    """
+    def _clean(s: str) -> str:
+        s = re.sub(r"\.\.+", ".", s)   # collapse double dots (scene releases)
+        return s.strip(" -._")
+
+    # Bracketed edition [Something] — use content verbatim
+    m = re.search(r"\[([^\]]+)\]", stem)
+    if m:
+        return _clean(stem[:m.start()] + stem[m.end():]), m.group(1).strip()
+
+    # Scene-style / title-embedded keywords
+    for pattern, edition_name in _EDITION_PATTERNS:
+        m = pattern.search(stem)
+        if m:
+            return _clean(stem[:m.start()] + stem[m.end():]), edition_name
+
+    return stem, ""
+
+
+def _clean_movie_stem_for_plex(stem: str) -> Tuple[str, Optional[int]]:
+    """
+    Convert a scene-release or already-clean stem to (clean_title, year).
+    Examples:
+      "Halloween.Kills.2021.FRENCH.1080p.WEBRip.x264-Group" -> ("Halloween Kills", 2021)
+      "A Christmas Carol (2009)"                             -> ("A Christmas Carol", 2009)
+      "Rebel Moon — Part One_ (2023)"                       -> ("Rebel Moon Part One", 2023)
+    """
+    txt = stem.replace(".", " ").replace("_", " ").replace("—", " ").replace("–", " ")
+    txt = re.sub(r"\s+-\s+", " ", txt)       # " - " separator → space
+    txt = re.sub(r"(?<!\s)-(?!\s)", " ", txt) # "x264-Group" → "x264 Group"
+
+    # Find year — prefer parenthesized form to avoid treating title numbers as year
+    # e.g. "1917 (2019)" → year=2019, not 1917
+    year: Optional[int] = None
+    m_paren = re.search(r"\((19\d{2}|20\d{2})\)", txt)
+    if m_paren:
+        try:
+            year = int(m_paren.group(1))
+        except Exception:
+            year = None
+    if year is None:
+        m_bare = re.search(r"\b(19\d{2}|20\d{2})\b", txt)
+        if m_bare:
+            try:
+                year = int(m_bare.group(1))
+            except Exception:
+                year = None
+
+    # Cut at first technical/scene stop keyword (only if there's title content before it)
+    stop = _SCENE_STOP_RE.search(txt)
+    if stop and stop.start() > 2:
+        txt = txt[:stop.start()]
+
+    # Remove year (with surrounding parens if present, then bare)
+    if year:
+        txt = re.sub(rf"\({year}\)", " ", txt)
+        txt = re.sub(rf"\b{year}\b", " ", txt)
+
+    txt = re.sub(r"\s+", " ", txt).strip(" -._")
+    return txt, year
+
+
+def build_destination_path(
+    src_file: str,
+    src_root: str,
+    dst_dir: str,
+    is_series_category: bool,
+    forced_series_name: str = "",
+) -> str:
+    raw_filename = os.path.basename(src_file)
+    stem, ext = os.path.splitext(raw_filename)
+    filename = normalize_service_tag(stem) + ext
+
+    if not is_series_category:
+        stem_clean, edition = _extract_edition(stem)
+        # Normalize extra spaces left after edition removal, then apply service tag map
+        stem_clean = re.sub(r"\s{2,}", " ", stem_clean).strip(" -._")
+        stem_normalized = normalize_service_tag(stem_clean)
+        if edition:
+            out_stem = stem_normalized + " {edition-" + edition + "}"
+        else:
+            out_stem = normalize_service_tag(stem)
+        return os.path.join(dst_dir, to_safe_filename(out_stem) + ".mkv")
+
+    rel = os.path.relpath(src_file, src_root)
+    rel_parts = [p for p in os.path.normpath(rel).split(os.sep) if p and p != "."]
+
+    # Priorité absolue : nom propre venant de Plex
+    series_name = (forced_series_name or "").strip()
+
+    # Fallback seulement si Plex n'a rien fourni
+    if not series_name:
+        src_root_name = os.path.basename(os.path.normpath(src_root)).strip()
+
+        if len(rel_parts) >= 3 and _is_season_dir(rel_parts[-2]):
+            series_name = rel_parts[-3]
+        elif len(rel_parts) >= 2 and not _is_season_dir(rel_parts[-2]):
+            series_name = rel_parts[-2]
+        else:
+            series_name = (
+                infer_series_name_from_rel(rel)
+                or infer_series_name_from_rel(src_root_name)
+                or "Série inconnue"
+            )
+
+    series_name = _resolve_series_folder_name(dst_dir, series_name, stem)
+
+    season, episode, ep_title = parse_episode_info(filename)
+
+    # Le nom de fichier seul ne contient pas toujours la saison (ex: "Episode 01 <titre>.mkv"
+    # sans indicateur SxxExx) — on retombe sur le dossier "Saison NN" source s'il existe.
+    if season is None and len(rel_parts) >= 2:
+        season = _season_number_from_dir(rel_parts[-2])
+
+    if season is not None:
+        return os.path.join(
+            dst_dir,
+            to_safe_filename(series_name),
+            f"Season {season:02d}",
+            to_safe_filename(filename),
+        )
+
+    return os.path.join(
+        dst_dir,
+        to_safe_filename(series_name),
+        to_safe_filename(filename),
+    )
+
+def probe_tracks(src_file: str, mkvmerge_path: str) -> Dict:
+    """
+    Retourne le JSON complet de mkvmerge -J pour un fichier vidéo.
+    """
+    cmd = [mkvmerge_path, "-J", to_win32_safe_path(src_file)]
+    result = subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    return json.loads(result.stdout)
+
+def choose_audio_track(meta: Dict) -> Optional[Dict]:
+    def _name_indicates_fr_ca(name_l: str) -> bool:
+        return (
+            'vfq' in name_l or 'quebec' in name_l or 'québec' in name_l or
+            ' canada' in name_l or '(qc' in name_l or 'canadien' in name_l or
+            'french (canada)' in name_l or 'français (canada)' in name_l
+        )
+
+    audio_tracks = [t for t in meta.get("tracks", []) if t.get("type") == "audio"]
+
+    for t in audio_tracks:
+        props = t.get("properties", {}) or {}
+        lang_ietf = (props.get("language_ietf") or "").lower()
+        tname_l = (props.get("track_name") or "").lower()
+        if "fr-ca" in lang_ietf or "fr_ca" in lang_ietf or _name_indicates_fr_ca(tname_l):
+            return t
+
+    for t in audio_tracks:
+        props = t.get("properties", {}) or {}
+        lang_ietf = (props.get("language_ietf") or "").lower()
+        lang_raw = (props.get("language") or "").lower()
+        if lang_ietf.startswith("fr") or lang_raw.startswith("fr"):
+            return t
+
+    return None
+
+def run_command_cancelable(cmd, job_id, active_processes, cancel_flags, progress_lock, progress_callback=None):
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8"
+    )
+
+    with progress_lock:
+        active_processes[job_id] = proc
+
+    output_lines = []
+
+    try:
+        while True:
+            line = proc.stdout.readline() if proc.stdout else ""
+            if line:
+                output_lines.append(line)
+                if progress_callback:
+                    m = re.match(r"Progress:\s*(\d+)%", line.strip())
+                    if m:
+                        try:
+                            progress_callback(int(m.group(1)))
+                        except Exception:
+                            pass
+
+            with progress_lock:
+                cancelled = cancel_flags.get(job_id, False)
+
+            if cancelled:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                raise MKVCancelledError("Traitement annulé")
+
+            if proc.poll() is not None:
+                break
+
+            time.sleep(0.1)
+
+        if proc.stdout:
+            rest = proc.stdout.read()
+            if rest:
+                output_lines.append(rest)
+
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(
+                proc.returncode,
+                cmd,
+                output="".join(output_lines)
+            )
+
+        return "".join(output_lines)
+
+    finally:
+        with progress_lock:
+            if active_processes.get(job_id) is proc:
+                active_processes.pop(job_id, None)
+
+def remux_file(
+    src_file: str,
+    dst_file: str,
+    mkvmerge_path: str,
+    mkvpropedit_path: str,
+    job_id=None,
+    active_processes=None,
+    cancel_flags=None,
+    progress_lock=None,
+    progress_callback=None,
+    language_overrides: dict = None,
+) -> None:
+    parent_dir = os.path.dirname(dst_file)
+    # Collect dirs that don't exist yet so we can fix permissions on each after makedirs
+    _new_dirs: list[str] = []
+    _p = parent_dir
+    while _p and _p != os.path.dirname(_p) and not os.path.exists(_p):
+        _new_dirs.append(_p)
+        _p = os.path.dirname(_p)
+    os.makedirs(parent_dir, exist_ok=True)
+    for _d in (reversed(_new_dirs) if _new_dirs else [parent_dir]):
+        fix_permissions(_d)
+
+    safe_src = to_win32_safe_path(src_file)
+    safe_dst = to_win32_safe_path(dst_file)
+
+    def _run(cmd, cb=None):
+        if job_id and active_processes is not None and cancel_flags is not None and progress_lock is not None:
+            return run_command_cancelable(cmd, job_id, active_processes, cancel_flags, progress_lock, progress_callback=cb)
+        return subprocess.run(cmd, check=True, text=True, encoding="utf-8")
+
+    def _name_indicates_fr_ca(name_l: str) -> bool:
+        return (
+            'vfq' in name_l or 'quebec' in name_l or 'québec' in name_l or
+            ' canada' in name_l or '(qc' in name_l or 'canadien' in name_l or
+            'french (canada)' in name_l or 'français (canada)' in name_l or
+            'fr-ca' in name_l or 'fr ca' in name_l
+        )
+
+    def _is_same_track(remuxed_track: Dict, original_track: Dict) -> bool:
+        rp = remuxed_track.get("properties", {}) or {}
+        op = original_track.get("properties", {}) or {}
+
+        r_lang = (rp.get("language_ietf") or rp.get("language") or "").lower()
+        o_lang = (op.get("language_ietf") or op.get("language") or "").lower()
+
+        r_name = (rp.get("track_name") or "").strip().lower()
+        o_name = (op.get("track_name") or "").strip().lower()
+
+        return r_lang == o_lang and r_name == o_name
+
+    try:
+        meta = probe_tracks(src_file, mkvmerge_path)
+        target_track = choose_audio_track(meta)
+
+        # Remux complet: on garde toutes les pistes
+        cmd = [mkvmerge_path, "-o", safe_dst, safe_src]
+        _run(cmd, cb=progress_callback)
+
+        remuxed_meta = probe_tracks(dst_file, mkvmerge_path)
+        remuxed_audio_tracks = [t for t in remuxed_meta.get("tracks", []) if t.get("type") == "audio"]
+        remuxed_subs = [t for t in remuxed_meta.get("tracks", []) if t.get("type") == "subtitles"]
+
+        selected_remuxed_track = None
+
+        if target_track:
+            target_props = target_track.get("properties", {}) or {}
+            target_name_l = (target_props.get("track_name") or "").lower()
+            target_lang_ietf = (target_props.get("language_ietf") or "").lower()
+            target_lang = (target_props.get("language") or "").lower()
+
+            # Tente d'abord de retrouver exactement la même piste après remux
+            for rt in remuxed_audio_tracks:
+                if _is_same_track(rt, target_track):
+                    selected_remuxed_track = rt
+                    break
+
+            # Fallback sur le type de piste recherché
+            if not selected_remuxed_track:
+                target_is_fr_ca = (
+                    "fr-ca" in target_lang_ietf or
+                    target_lang in {"fr-ca", "fra-ca", "fre-ca"} or
+                    _name_indicates_fr_ca(target_name_l)
+                )
+
+                for rt in remuxed_audio_tracks:
+                    rp = rt.get("properties", {}) or {}
+                    r_name_l = (rp.get("track_name") or "").lower()
+                    r_lang_ietf = (rp.get("language_ietf") or "").lower()
+                    r_lang = (rp.get("language") or "").lower()
+
+                    if target_is_fr_ca:
+                        if (
+                            "fr-ca" in r_lang_ietf or
+                            r_lang in {"fr-ca", "fra-ca", "fre-ca"} or
+                            _name_indicates_fr_ca(r_name_l)
+                        ):
+                            selected_remuxed_track = rt
+                            break
+                    else:
+                        if r_lang_ietf.startswith("fr") or r_lang.startswith("fr"):
+                            selected_remuxed_track = rt
+                            break
+
+        # Fallback intelligent si aucune piste FR / FR-CA trouvée
+        if not selected_remuxed_track and remuxed_audio_tracks:
+            selected_remuxed_track = remuxed_audio_tracks[0]
+            try:
+                current_app.logger.warning(
+                    "[MKV] Aucune piste FR/FR-CA trouvée dans '%s'; utilisation de la première piste audio disponible.",
+                    os.path.basename(src_file)
+                )
+            except Exception:
+                pass
+
+        # Toutes les pistes audio à default=0
+        for idx, _at in enumerate(remuxed_audio_tracks, start=1):
+            _run([
+                mkvpropedit_path, safe_dst,
+                "--edit", f"track:a{idx}",
+                "--set", "flag-default=0"
+            ])
+
+        # La piste choisie devient default=1
+        if selected_remuxed_track:
+            selected_index = None
+            for idx, at in enumerate(remuxed_audio_tracks, start=1):
+                if at.get("id") == selected_remuxed_track.get("id"):
+                    selected_index = idx
+                    break
+
+            if selected_index is not None:
+                props = selected_remuxed_track.get("properties", {}) or {}
+                tname = props.get("track_name") or ""
+                tname_l = tname.lower()
+
+                is_fr_ca = (
+                    "fr-ca" in (props.get("language_ietf", "").lower())
+                    or (props.get("language", "").lower() in {"fr-ca", "fra-ca", "fre-ca"})
+                    or _name_indicates_fr_ca(tname_l)
+                )
+
+                current_lang_ietf = (props.get("language_ietf") or "").lower()
+                current_lang = (props.get("language") or "").lower()
+
+                should_normalize_to_french = (
+                    is_fr_ca or
+                    current_lang_ietf.startswith("fr") or
+                    current_lang.startswith("fr")
+                )
+
+                final_name = tname.strip() if tname and tname.strip() else (
+                    "Français (Canada)" if is_fr_ca else "Français"
+                )
+
+                edit_cmd = [
+                    mkvpropedit_path, safe_dst,
+                    "--edit", f"track:a{selected_index}",
+                    "--set", "flag-default=1",
+                ]
+
+                if should_normalize_to_french:
+                    ietf_target = "fr-CA" if is_fr_ca else "fr-FR"
+                    iso_target = "fra"
+                    edit_cmd.extend([
+                        "--set", f"language-ietf={ietf_target}",
+                        "--set", f"language={iso_target}",
+                    ])
+
+                _run(edit_cmd)
+
+                if should_normalize_to_french:
+                    _run([
+                        mkvpropedit_path, safe_dst,
+                        "--edit", f"track:a{selected_index}",
+                        "--delete", "name"
+                    ])
+                    _run([
+                        mkvpropedit_path, safe_dst,
+                        "--edit", f"track:a{selected_index}",
+                        "--set", f"name={final_name}"
+                    ])
+
+                try:
+                    current_app.logger.info(
+                        "[MKV] Default audio set to: %s (track a%s) for '%s'",
+                        final_name,
+                        selected_index,
+                        os.path.basename(src_file)
+                    )
+                except Exception:
+                    pass
+
+        # Désactiver les sous-titres par défaut sans toucher au forced
+        for st in remuxed_subs:
+            tid = st.get("id")
+            if tid is not None:
+                _run([
+                    mkvpropedit_path, safe_dst,
+                    "--edit", f"track:{tid}",
+                    "--set", "flag-default=0"
+                ])
+
+        # Appliquer les overrides de langue utilisateur
+        if language_overrides:
+            _ISO1_TO_ISO3 = {
+                "fr": "fra", "en": "eng", "es": "spa", "pt": "por",
+                "de": "deu", "it": "ita", "ja": "jpn", "ko": "kor",
+                "zh": "zho", "ru": "rus", "ar": "ara", "und": "und",
+            }
+            _LANG_NAMES = {
+                "fr-ca": "Français (Canada)",
+                "fr":    "Français",
+                "en-us": "English (US)",
+                "en-gb": "English (UK)",
+                "en":    "English",
+                "es":    "Español",
+                "pt-br": "Português (Brasil)",
+                "pt":    "Português",
+                "de":    "Deutsch",
+                "it":    "Italiano",
+                "ja":    "日本語",
+                "ko":    "한국어",
+                "zh":    "中文",
+                "ru":    "Русский",
+                "ar":    "العربية",
+                "nl":    "Nederlands",
+                "fil":   "Filipino",
+            }
+            for str_idx, new_lang in (language_overrides or {}).items():
+                try:
+                    idx = int(str_idx)
+                    new_lang = (new_lang or "").strip()
+                    if not new_lang:
+                        continue
+                    base = new_lang.split("-")[0].lower()
+                    iso3 = _ISO1_TO_ISO3.get(base, base[:3] if len(base) >= 3 else base)
+                    track_name = _LANG_NAMES.get(new_lang.lower(), new_lang)
+                    _run([
+                        mkvpropedit_path, safe_dst,
+                        "--edit", f"track:a{idx}",
+                        "--set", f"language-ietf={new_lang}",
+                        "--set", f"language={iso3}",
+                        "--set", f"name={track_name}",
+                    ])
+                except Exception:
+                    pass
+
+        # Permissions finales du fichier remuxé
+        fix_permissions(dst_file)
+
+        # Permissions du dossier parent
+        parent_dir = os.path.dirname(dst_file)
+        if parent_dir and os.path.isdir(parent_dir):
+            fix_permissions(parent_dir)
+
+        # Renommage scène + année dossier série
+        _apply_scene_name(src_file, dst_file)
+
+    except MKVCancelledError:
+        if os.path.exists(dst_file):
+            try:
+                os.remove(dst_file)
+            except Exception:
+                pass
+        raise
