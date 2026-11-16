@@ -20,6 +20,8 @@
 
   <Config Name="Media Library" Target="/mnt/user" Default="/mnt/user" Mode="rw" Description="Access to your Unraid user shares (Plex libraries, FTP inbox, MKV destinations, etc.) — must match whatever paths are referenced in Config > FTP/MKV/Spotify settings." Type="Path" Display="always" Required="true" Mask="false">/mnt/user</Config>
 
+  <Config Name="Full /mnt Access" Target="/mnt" Default="/mnt" Mode="rw" Description="Optional: full access to all Unraid mount points (unassigned disks, disk shares, remote/network mounts) beyond /mnt/user — needed only if your FTP/MKV/Spotify paths in Config reference locations outside standard user shares." Type="Path" Display="advanced" Required="false" Mask="false">/mnt</Config>
+
   <Config Name="SECRET_KEY" Target="SECRET_KEY" Default="" Mode="" Description="Flask secret key for session security. If left empty, a key is auto-generated and saved to /config/secret_key.txt on first start." Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
   <Config Name="Timezone" Target="TZ" Default="America/Montreal" Mode="" Description="Container timezone (e.g. America/New_York, Europe/Paris)." Type="Variable" Display="always" Required="false" Mask="false">America/Montreal</Config>
