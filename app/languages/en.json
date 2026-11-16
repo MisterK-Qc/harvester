@@ -386,6 +386,7 @@
   "playlist.playlist_created":"Playlist created:",
   "playlist.tab_matched":  "Found",
   "playlist.tab_unmatched":"Not found",
+  "playlist.tab_reserved": "Reserved",
   "playlist.no_items":     "No items.",
   "playlist.col_type":     "Type",
   "playlist.col_trakt":    "Trakt",
@@ -419,5 +420,7 @@
   "playlist.tmdb_search_ph":    "Search TMDB…",
   "playlist.tmdb_no_key":       "TMDB API key not configured.",
   "playlist.import_plex_btn":   "📥 From Plex",
-  "playlist.plex_pl_empty":     "No Plex playlists found."
+  "playlist.plex_pl_empty":     "No Plex playlists found.",
+  "playlist.import_defaults_btn": "🌐 Universe playlists",
+  "playlist.defaults_empty":      "No universe playlists available."
 }

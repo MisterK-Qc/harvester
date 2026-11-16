@@ -218,6 +218,9 @@
       <button class="button-secondary" id="pl-import-plex-btn">
         {{ t("playlist.import_plex_btn") }}
       </button>
+      <button class="button-secondary" id="pl-import-defaults-btn">
+        {{ t("playlist.import_defaults_btn") }}
+      </button>
       <button class="button-secondary" id="pl-push-btn" style="display:none;">
         {{ t("playlist.push_btn") }}
       </button>
@@ -226,6 +229,10 @@
     <!-- Dropdown playlists Plex -->
     <div id="pl-import-plex-panel" style="display:none; margin-top:.6rem; background:var(--bg-elev-2); border:1px solid var(--border); border-radius:6px; overflow:hidden; max-height:260px; overflow-y:auto;">
       <div id="pl-import-plex-list"><span class="pl-spinner" style="margin:.75rem;"></span></div>
+    </div>
+    <!-- Dropdown playlists d'univers maison -->
+    <div id="pl-import-defaults-panel" style="display:none; margin-top:.6rem; background:var(--bg-elev-2); border:1px solid var(--border); border-radius:6px; overflow:hidden; max-height:260px; overflow-y:auto;">
+      <div id="pl-import-defaults-list"><span class="pl-spinner" style="margin:.75rem;"></span></div>
     </div>
   </div>
 
@@ -255,6 +262,7 @@
   let _hideUnmatched  = false;  // true en mode manuel/chargement
   let _nameAutoFilled = false;  // true si le nom vient de Trakt/Plex (pas saisi manuellement)
   let _linkIdx        = null;   // index de l'item en cours de liaison manuelle
+  let _defaultSource  = '';     // 'default:<slug>' si la playlist vient d'un univers maison
 
   // Drag state
   let _dragIdx = null;
@@ -262,7 +270,44 @@
   if (cidInput && cidInput.type === 'text') {
     cidInput.addEventListener('input', () => { previewBtn.disabled = !cidInput.value.trim(); });
   }
-  urlInput.addEventListener('input', () => { pushBtn.style.display = 'none'; _items = []; });
+  urlInput.addEventListener('input', () => { pushBtn.style.display = 'none'; _items = []; _defaultSource = ''; });
+
+  // ── Applique une réponse de preview (Trakt ou univers maison) ─────────────
+  function applyPreviewResponse(data) {
+    _listName  = data.list_name || '';
+    _total     = data.total;
+    _unmatched = data.unmatched_items || [];
+    if (!nameInput.value.trim() || _nameAutoFilled) {
+      nameInput.value = _listName;
+      _nameAutoFilled = true;
+    }
+
+    // Ordre original préservé — unmatched deviennent des réservés ⏳
+    _items = (data.ordered_items || []).map(it => ({
+      key:           it.plex_key || null,
+      title:         it.title,
+      year:          it.year,
+      type:          it.type,
+      plex_title:    it.plex_title || null,
+      checked:       true,
+      available:     it.matched === true,
+      tmdb_id:       it.tmdb_id       || null,
+      imdb_id:       it.imdb_id       || null,
+      tvdb_id:       it.tvdb_id       || null,
+      episodes:      null,
+      ep_keys:       null,
+      season:        it.season        || null,
+      episode_num:   it.episode_num   || null,
+      episode_count: it.episode_count || null,
+      show_title:    it.show_title    || null,
+      show_tmdb_id:  it.show_tmdb_id  || null,
+      show_tvdb_id:  it.show_tvdb_id  || null,
+      show_imdb_id:  it.show_imdb_id  || null,
+    }));
+
+    renderAll(false);
+    if (_items.some(i => i.available)) pushBtn.style.display = '';
+  }
   nameInput.addEventListener('input', () => { _nameAutoFilled = false; });
 
   // ── ANALYSER ──────────────────────────────────────────────────────────────
@@ -273,7 +318,7 @@
 
     previewBtn.disabled = true;
     pushBtn.style.display = 'none';
-    _items = []; _unmatched = []; _hideUnmatched = false; _traktUrl = trakt_url;
+    _items = []; _unmatched = []; _hideUnmatched = false; _traktUrl = trakt_url; _defaultSource = '';
     resultEl.style.display = 'none';
     statusEl.innerHTML = '<span class="pl-spinner"></span>{{ t("playlist.importing") }}';
 
@@ -287,47 +332,14 @@
       previewBtn.disabled = false;
       statusEl.textContent = '';
       if (!data.ok) { showError(data.error || '{{ t("playlist.error_generic") }}'); return; }
-
-      _listName  = data.list_name || '';
-      _total     = data.total;
-      _unmatched = data.unmatched_items || [];
-      if (!nameInput.value.trim() || _nameAutoFilled) {
-        nameInput.value = _listName;
-        _nameAutoFilled = true;
-      }
-
-      // Ordre original Trakt préservé — unmatched deviennent des réservés ⏳
-      _items = (data.ordered_items || []).map(it => ({
-        key:           it.plex_key || null,
-        title:         it.title,
-        year:          it.year,
-        type:          it.type,
-        plex_title:    it.plex_title || null,
-        checked:       true,
-        available:     it.matched === true,
-        tmdb_id:       it.tmdb_id       || null,
-        imdb_id:       it.imdb_id       || null,
-        tvdb_id:       it.tvdb_id       || null,
-        episodes:      null,
-        ep_keys:       null,
-        season:        it.season        || null,
-        episode_num:   it.episode_num   || null,
-        episode_count: it.episode_count || null,
-        show_title:    it.show_title    || null,
-        show_tmdb_id:  it.show_tmdb_id  || null,
-        show_tvdb_id:  it.show_tvdb_id  || null,
-        show_imdb_id:  it.show_imdb_id  || null,
-      }));
-
-      renderAll(false);
-      if (_items.some(i => i.available)) pushBtn.style.display = '';
+      applyPreviewResponse(data);
     })
     .catch(err => { previewBtn.disabled = false; statusEl.textContent = ''; showError(String(err)); });
   });
 
   // ── CRÉER MANUELLEMENT ────────────────────────────────────────────────────
   scratchBtn.addEventListener('click', () => {
-    _items = []; _unmatched = []; _listName = ''; _traktUrl = ''; _total = 0; _hideUnmatched = true; _nameAutoFilled = false;
+    _items = []; _unmatched = []; _listName = ''; _traktUrl = ''; _defaultSource = ''; _total = 0; _hideUnmatched = true; _nameAutoFilled = false;
     statusEl.textContent = '';
     nameInput.value = '';
     renderAll(false, null, null, 'add');
@@ -393,18 +405,18 @@
     let statsHtml = '';
     if (!_hideUnmatched) {
       statsHtml = `<div class="pl-stats">
-        <div class="pl-stat"><span class="pl-stat-num">${_total}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
-        <div class="pl-stat"><span class="pl-stat-num ok">${_items.filter(i=>i.available).length}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>
+        <div class="pl-stat"><span class="pl-stat-num" id="pl-stat-total">${_total}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
+        <div class="pl-stat"><span class="pl-stat-num ok" id="pl-stat-avail">${_items.filter(i=>i.available).length}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>
         <div class="pl-stat"><span class="pl-stat-num ${_unmatched.length > 0 ? 'warn' : ''}">${_unmatched.length}</span><span class="pl-stat-label">{{ t("playlist.stat_unmatched") }}</span></div>
-        ${pendingCount > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend">${pendingCount}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
+        ${pendingCount > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend" id="pl-stat-pend">${pendingCount}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
       </div>`;
     } else if (_items.length > 0) {
       const avail = _items.filter(i => i.available).length;
       const pend  = _items.filter(i => !i.available).length;
       statsHtml = `<div class="pl-stats">
-        <div class="pl-stat"><span class="pl-stat-num">${_items.length}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
-        ${avail > 0 ? `<div class="pl-stat"><span class="pl-stat-num ok">${avail}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>` : ''}
-        ${pend  > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend">${pend}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
+        <div class="pl-stat"><span class="pl-stat-num" id="pl-stat-total">${_items.length}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
+        ${avail > 0 ? `<div class="pl-stat"><span class="pl-stat-num ok" id="pl-stat-avail">${avail}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>` : ''}
+        ${pend  > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend" id="pl-stat-pend">${pend}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
       </div>`;
     }
 
@@ -418,10 +430,12 @@
       <div class="pl-tabs">
         ${tab('matched',   '{{ t("playlist.tab_matched") }} (' + checkedCount + ')', activeTab === 'matched')}
         ${!_hideUnmatched ? tab('unmatched', '{{ t("playlist.tab_unmatched") }} (' + _unmatched.length + ')', activeTab === 'unmatched') : ''}
+        ${pendingCount > 0 ? tab('reserved', '⏳ {{ t("playlist.tab_reserved") }} (' + pendingCount + ')', activeTab === 'reserved') : ''}
         ${tab('add', '{{ t("playlist.tab_add") }}', activeTab === 'add')}
       </div>
       ${panel('matched',   activeTab === 'matched')}
       ${!_hideUnmatched ? panel('unmatched', activeTab === 'unmatched', buildUnmatchedTable()) : ''}
+      ${pendingCount > 0 ? panel('reserved', activeTab === 'reserved', buildReservedTable()) : ''}
       ${panel('add',       activeTab === 'add', buildAddPanel())}
     `;
     resultEl.style.display = 'block';
@@ -430,6 +444,7 @@
     bindTabs();
     bindAddPanel();
     if (!_hideUnmatched) bindUnmatchedPanel();
+    if (pendingCount > 0) bindReservedPanel();
   }
 
   // ── TABLE ITEMS MATCHÉS ───────────────────────────────────────────────────
@@ -600,7 +615,7 @@
     panel.querySelectorAll('.pl-remove-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         _items.splice(parseInt(btn.dataset.idx), 1);
-        renderMatchedTable(); updateMatchedCount();
+        renderMatchedTable(); updateMatchedCount(); syncReservedAndStats();
       });
     });
 
@@ -679,6 +694,7 @@
     _linkIdx = null;
     renderMatchedTable();
     updateMatchedCount();
+    syncReservedAndStats();
     pushBtn.style.display = '';
   }
 
@@ -801,6 +817,50 @@
     pushBtn.style.display = _items.some(i => i.available) ? '' : 'none';
   }
 
+  // ── Garde les stats + l'onglet Réservés synchros sans reconstruire tout
+  // #pl-result (préserve en particulier les résultats de recherche affichés
+  // dans l'onglet "+ Ajouter" pendant qu'on y ajoute plusieurs items) ───────
+  function syncReservedAndStats() {
+    const avail = _items.filter(i => i.available).length;
+    const pend  = _items.filter(i => !i.available).length;
+
+    const totalEl = document.getElementById('pl-stat-total');
+    const availEl = document.getElementById('pl-stat-avail');
+    const pendEl  = document.getElementById('pl-stat-pend');
+    if (totalEl && _hideUnmatched) totalEl.textContent = _items.length;
+    if (availEl) availEl.textContent = avail;
+    if (pendEl)  pendEl.textContent  = pend;
+
+    const tabsEl = document.querySelector('.pl-tabs');
+    let tabBtn   = document.querySelector('.pl-tab[data-panel="reserved"]');
+    let panelEl  = document.getElementById('pl-panel-reserved');
+
+    if (pend > 0) {
+      if (!tabBtn && tabsEl) {
+        tabBtn = document.createElement('button');
+        tabBtn.className = 'pl-tab';
+        tabBtn.dataset.panel = 'reserved';
+        tabBtn.addEventListener('click', () => switchToTab('reserved'));
+        const addTabBtn = document.querySelector('.pl-tab[data-panel="add"]');
+        tabsEl.insertBefore(tabBtn, addTabBtn || null);
+      }
+      if (tabBtn) tabBtn.textContent = '⏳ {{ t("playlist.tab_reserved") }} (' + pend + ')';
+      if (!panelEl) {
+        panelEl = document.createElement('div');
+        panelEl.className = 'pl-panel';
+        panelEl.id = 'pl-panel-reserved';
+        const addPanelEl = document.getElementById('pl-panel-add');
+        if (addPanelEl && addPanelEl.parentNode) addPanelEl.parentNode.insertBefore(panelEl, addPanelEl);
+        else resultEl.appendChild(panelEl);
+      }
+      panelEl.innerHTML = buildReservedTable();
+      bindReservedPanel();
+    } else {
+      if (tabBtn)  tabBtn.remove();
+      if (panelEl) panelEl.remove();
+    }
+  }
+
   // ── TABLE INTROUVABLES ────────────────────────────────────────────────────
   function buildUnmatchedTable() {
     if (!_unmatched.length) return `<p class="pl-muted">{{ t("playlist.no_items") }}</p>`;
@@ -885,7 +945,82 @@
         if (row) { btn.disabled = true; btn.textContent = '✓ {{ t("playlist.badge_pending") }}'; btn.style.color = '#ffa726'; }
         renderMatchedTable();
         updateMatchedCount();
+        syncReservedAndStats();
         pushBtn.style.display = '';
+      });
+    });
+  }
+
+  // ── TABLE RÉSERVÉS (vue dédiée, utile pour retrouver les placeholders
+  // dans une longue liste chargée — ex. tous les épisodes manquants) ───────
+  function buildReservedTable() {
+    const pending = [];
+    _items.forEach((it, idx) => { if (!it.available) pending.push({ it, idx }); });
+    if (!pending.length) return `<p class="pl-muted">{{ t("playlist.no_items") }}</p>`;
+
+    const rows = pending.map(({ it, idx }) => {
+      let badge;
+      if (it.type === 'movie') {
+        badge = '<span class="pl-badge-movie">Film</span>';
+      } else if (it.type === 'episode') {
+        badge = `<span class="pl-badge-episode">S${String(it.season||0).padStart(2,'0')}E${String(it.episode_num||0).padStart(2,'0')}</span>`;
+      } else if (it.type === 'season') {
+        badge = `<span class="pl-badge-episode">S${String(it.season||0).padStart(2,'0')}</span>`;
+      } else {
+        badge = '<span class="pl-badge-show">Série</span>';
+      }
+
+      const year = it.year ? ` (${it.year})` : '';
+      const titleCell = (it.type === 'episode' || it.type === 'season') && it.show_title
+        ? `<span style="color:var(--muted);font-size:.8rem;">${escHtml(it.show_title)}</span> — ${escHtml(it.title)}`
+        : escHtml(it.title) + escHtml(year);
+      const tmdb = it.tmdb_id
+        ? `<a href="https://www.themoviedb.org/${it.type === 'movie' ? 'movie' : 'tv'}/${it.tmdb_id}" target="_blank" rel="noopener" style="font-size:.75rem;">TMDB</a>`
+        : '';
+
+      return `<tr data-idx="${idx}">
+        <td>${badge}</td>
+        <td>${titleCell}</td>
+        <td>${tmdb}</td>
+        <td style="white-space:nowrap;">
+          <button class="pl-link-btn pl-reserved-link-btn" data-idx="${idx}" title="Lier à un item Plex">🔗</button>
+          <button class="pl-remove-btn pl-reserved-remove-btn" data-idx="${idx}">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="pl-table">
+      <thead><tr>
+        <th>{{ t("playlist.col_type") }}</th>
+        <th>{{ t("playlist.col_trakt") }}</th>
+        <th></th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function bindReservedPanel() {
+    const panel = document.getElementById('pl-panel-reserved');
+    if (!panel) return;
+
+    panel.querySelectorAll('.pl-reserved-link-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx);
+        switchToTab('matched');
+        _linkIdx = idx;
+        renderMatchedTable();
+        const inp = document.getElementById(`pl-link-input-${idx}`);
+        if (inp) inp.focus();
+      });
+    });
+
+    panel.querySelectorAll('.pl-reserved-remove-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _items.splice(parseInt(btn.dataset.idx), 1);
+        renderMatchedTable();
+        updateMatchedCount();
+        syncReservedAndStats();
       });
     });
   }
@@ -964,6 +1099,7 @@
               });
               renderMatchedTable();
               updateMatchedCount();
+              syncReservedAndStats();
               row.style.opacity = '.4'; row.style.pointerEvents = 'none';
               pushBtn.style.display = '';
             });
@@ -1041,6 +1177,7 @@
               row.querySelector('span:last-child').textContent = '✓';
               renderMatchedTable();
               updateMatchedCount();
+              syncReservedAndStats();
               pushBtn.style.display = '';
             });
           });
@@ -1080,7 +1217,7 @@
     fetch('/playlists/save', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, trakt_url: _traktUrl, items}),
+      body: JSON.stringify({name, trakt_url: _traktUrl, source: _defaultSource || '', items}),
     })
     .then(r => r.json())
     .then(data => {
@@ -1152,6 +1289,7 @@
                 }));
                 _listName  = data.name;
                 _traktUrl  = data.trakt_url || '';
+                _defaultSource = data.source || '';
                 _unmatched = [];
                 _total     = _items.length;
                 _hideUnmatched = true;
@@ -1296,6 +1434,7 @@
                   }));
                   _listName  = data.name;
                   _traktUrl  = '';
+                  _defaultSource = '';
                   _unmatched = [];
                   _total     = _items.length;
                   _hideUnmatched  = true;
@@ -1311,6 +1450,61 @@
         })
         .catch(() => {
           importPlexList.innerHTML = `<p class="pl-muted" style="padding:.5rem .75rem;">Erreur réseau.</p>`;
+        });
+    }
+  });
+
+  // ── IMPORTER UNE PLAYLIST D'UNIVERS MAISON ─────────────────────────────────
+  const importDefaultsBtn   = document.getElementById('pl-import-defaults-btn');
+  const importDefaultsPanel = document.getElementById('pl-import-defaults-panel');
+  const importDefaultsList  = document.getElementById('pl-import-defaults-list');
+  let _defaultsLoaded = false;
+
+  importDefaultsBtn.addEventListener('click', () => {
+    const open = importDefaultsPanel.style.display !== 'none';
+    importDefaultsPanel.style.display = open ? 'none' : 'block';
+    if (!open && !_defaultsLoaded) {
+      _defaultsLoaded = true;
+      fetch('/playlists/defaults')
+        .then(r => r.json())
+        .then(data => {
+          if (!data.ok || !data.playlists.length) {
+            importDefaultsList.innerHTML = `<p class="pl-muted" style="padding:.5rem .75rem;">{{ t("playlist.defaults_empty") }}</p>`;
+            return;
+          }
+          importDefaultsList.innerHTML = data.playlists.map(p =>
+            `<div class="pl-saved-row" style="cursor:pointer;" data-slug="${escHtml(p.slug)}" data-name="${escHtml(p.name)}" title="${escHtml(p.summary)}">
+              <span class="pl-saved-name">${escHtml(p.name)}</span>
+              <span class="pl-saved-meta">${p.item_count} items</span>
+            </div>`
+          ).join('');
+
+          importDefaultsList.querySelectorAll('[data-slug]').forEach(row => {
+            row.addEventListener('click', () => {
+              const slug = row.dataset.slug;
+              const name = row.dataset.name;
+              row.innerHTML = `<span class="pl-spinner" style="width:14px;height:14px;margin:.2rem .4rem;"></span> ${escHtml(name)}`;
+
+              fetch(`/playlists/defaults/${encodeURIComponent(slug)}/preview`, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                  importDefaultsPanel.style.display = 'none';
+                  if (!data.ok) { showError(data.error || '{{ t("playlist.error_generic") }}'); return; }
+
+                  _traktUrl      = '';
+                  _defaultSource = data.source || `default:${slug}`;
+                  _hideUnmatched = false;
+                  _nameAutoFilled = false;
+                  urlInput.value  = '';
+                  nameInput.value = '';
+                  applyPreviewResponse(data);
+                })
+                .catch(() => { importDefaultsPanel.style.display = 'none'; });
+            });
+          });
+        })
+        .catch(() => {
+          importDefaultsList.innerHTML = `<p class="pl-muted" style="padding:.5rem .75rem;">Erreur réseau.</p>`;
         });
     }
   });
