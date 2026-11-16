@@ -386,6 +386,7 @@
   "playlist.playlist_created":"Playlist created:",
   "playlist.tab_matched":  "Found",
   "playlist.tab_unmatched":"Not found",
+  "playlist.tab_reserved": "Reserved",
   "playlist.no_items":     "No items.",
   "playlist.col_type":     "Type",
   "playlist.col_trakt":    "Trakt",

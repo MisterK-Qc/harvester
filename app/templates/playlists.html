@@ -405,18 +405,18 @@
     let statsHtml = '';
     if (!_hideUnmatched) {
       statsHtml = `<div class="pl-stats">
-        <div class="pl-stat"><span class="pl-stat-num">${_total}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
-        <div class="pl-stat"><span class="pl-stat-num ok">${_items.filter(i=>i.available).length}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>
+        <div class="pl-stat"><span class="pl-stat-num" id="pl-stat-total">${_total}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
+        <div class="pl-stat"><span class="pl-stat-num ok" id="pl-stat-avail">${_items.filter(i=>i.available).length}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>
         <div class="pl-stat"><span class="pl-stat-num ${_unmatched.length > 0 ? 'warn' : ''}">${_unmatched.length}</span><span class="pl-stat-label">{{ t("playlist.stat_unmatched") }}</span></div>
-        ${pendingCount > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend">${pendingCount}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
+        ${pendingCount > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend" id="pl-stat-pend">${pendingCount}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
       </div>`;
     } else if (_items.length > 0) {
       const avail = _items.filter(i => i.available).length;
       const pend  = _items.filter(i => !i.available).length;
       statsHtml = `<div class="pl-stats">
-        <div class="pl-stat"><span class="pl-stat-num">${_items.length}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
-        ${avail > 0 ? `<div class="pl-stat"><span class="pl-stat-num ok">${avail}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>` : ''}
-        ${pend  > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend">${pend}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
+        <div class="pl-stat"><span class="pl-stat-num" id="pl-stat-total">${_items.length}</span><span class="pl-stat-label">{{ t("playlist.stat_total") }}</span></div>
+        ${avail > 0 ? `<div class="pl-stat"><span class="pl-stat-num ok" id="pl-stat-avail">${avail}</span><span class="pl-stat-label">{{ t("playlist.stat_matched") }}</span></div>` : ''}
+        ${pend  > 0 ? `<div class="pl-stat"><span class="pl-stat-num pend" id="pl-stat-pend">${pend}</span><span class="pl-stat-label">{{ t("playlist.badge_pending") }}</span></div>` : ''}
       </div>`;
     }
 
@@ -430,10 +430,12 @@
       <div class="pl-tabs">
         ${tab('matched',   '{{ t("playlist.tab_matched") }} (' + checkedCount + ')', activeTab === 'matched')}
         ${!_hideUnmatched ? tab('unmatched', '{{ t("playlist.tab_unmatched") }} (' + _unmatched.length + ')', activeTab === 'unmatched') : ''}
+        ${pendingCount > 0 ? tab('reserved', '⏳ {{ t("playlist.tab_reserved") }} (' + pendingCount + ')', activeTab === 'reserved') : ''}
         ${tab('add', '{{ t("playlist.tab_add") }}', activeTab === 'add')}
       </div>
       ${panel('matched',   activeTab === 'matched')}
       ${!_hideUnmatched ? panel('unmatched', activeTab === 'unmatched', buildUnmatchedTable()) : ''}
+      ${pendingCount > 0 ? panel('reserved', activeTab === 'reserved', buildReservedTable()) : ''}
       ${panel('add',       activeTab === 'add', buildAddPanel())}
     `;
     resultEl.style.display = 'block';
@@ -442,6 +444,7 @@
     bindTabs();
     bindAddPanel();
     if (!_hideUnmatched) bindUnmatchedPanel();
+    if (pendingCount > 0) bindReservedPanel();
   }
 
   // ── TABLE ITEMS MATCHÉS ───────────────────────────────────────────────────
@@ -612,7 +615,7 @@
     panel.querySelectorAll('.pl-remove-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         _items.splice(parseInt(btn.dataset.idx), 1);
-        renderMatchedTable(); updateMatchedCount();
+        renderMatchedTable(); updateMatchedCount(); syncReservedAndStats();
       });
     });
 
@@ -691,6 +694,7 @@
     _linkIdx = null;
     renderMatchedTable();
     updateMatchedCount();
+    syncReservedAndStats();
     pushBtn.style.display = '';
   }
 
@@ -813,6 +817,50 @@
     pushBtn.style.display = _items.some(i => i.available) ? '' : 'none';
   }
 
+  // ── Garde les stats + l'onglet Réservés synchros sans reconstruire tout
+  // #pl-result (préserve en particulier les résultats de recherche affichés
+  // dans l'onglet "+ Ajouter" pendant qu'on y ajoute plusieurs items) ───────
+  function syncReservedAndStats() {
+    const avail = _items.filter(i => i.available).length;
+    const pend  = _items.filter(i => !i.available).length;
+
+    const totalEl = document.getElementById('pl-stat-total');
+    const availEl = document.getElementById('pl-stat-avail');
+    const pendEl  = document.getElementById('pl-stat-pend');
+    if (totalEl && _hideUnmatched) totalEl.textContent = _items.length;
+    if (availEl) availEl.textContent = avail;
+    if (pendEl)  pendEl.textContent  = pend;
+
+    const tabsEl = document.querySelector('.pl-tabs');
+    let tabBtn   = document.querySelector('.pl-tab[data-panel="reserved"]');
+    let panelEl  = document.getElementById('pl-panel-reserved');
+
+    if (pend > 0) {
+      if (!tabBtn && tabsEl) {
+        tabBtn = document.createElement('button');
+        tabBtn.className = 'pl-tab';
+        tabBtn.dataset.panel = 'reserved';
+        tabBtn.addEventListener('click', () => switchToTab('reserved'));
+        const addTabBtn = document.querySelector('.pl-tab[data-panel="add"]');
+        tabsEl.insertBefore(tabBtn, addTabBtn || null);
+      }
+      if (tabBtn) tabBtn.textContent = '⏳ {{ t("playlist.tab_reserved") }} (' + pend + ')';
+      if (!panelEl) {
+        panelEl = document.createElement('div');
+        panelEl.className = 'pl-panel';
+        panelEl.id = 'pl-panel-reserved';
+        const addPanelEl = document.getElementById('pl-panel-add');
+        if (addPanelEl && addPanelEl.parentNode) addPanelEl.parentNode.insertBefore(panelEl, addPanelEl);
+        else resultEl.appendChild(panelEl);
+      }
+      panelEl.innerHTML = buildReservedTable();
+      bindReservedPanel();
+    } else {
+      if (tabBtn)  tabBtn.remove();
+      if (panelEl) panelEl.remove();
+    }
+  }
+
   // ── TABLE INTROUVABLES ────────────────────────────────────────────────────
   function buildUnmatchedTable() {
     if (!_unmatched.length) return `<p class="pl-muted">{{ t("playlist.no_items") }}</p>`;
@@ -897,7 +945,82 @@
         if (row) { btn.disabled = true; btn.textContent = '✓ {{ t("playlist.badge_pending") }}'; btn.style.color = '#ffa726'; }
         renderMatchedTable();
         updateMatchedCount();
+        syncReservedAndStats();
         pushBtn.style.display = '';
+      });
+    });
+  }
+
+  // ── TABLE RÉSERVÉS (vue dédiée, utile pour retrouver les placeholders
+  // dans une longue liste chargée — ex. tous les épisodes manquants) ───────
+  function buildReservedTable() {
+    const pending = [];
+    _items.forEach((it, idx) => { if (!it.available) pending.push({ it, idx }); });
+    if (!pending.length) return `<p class="pl-muted">{{ t("playlist.no_items") }}</p>`;
+
+    const rows = pending.map(({ it, idx }) => {
+      let badge;
+      if (it.type === 'movie') {
+        badge = '<span class="pl-badge-movie">Film</span>';
+      } else if (it.type === 'episode') {
+        badge = `<span class="pl-badge-episode">S${String(it.season||0).padStart(2,'0')}E${String(it.episode_num||0).padStart(2,'0')}</span>`;
+      } else if (it.type === 'season') {
+        badge = `<span class="pl-badge-episode">S${String(it.season||0).padStart(2,'0')}</span>`;
+      } else {
+        badge = '<span class="pl-badge-show">Série</span>';
+      }
+
+      const year = it.year ? ` (${it.year})` : '';
+      const titleCell = (it.type === 'episode' || it.type === 'season') && it.show_title
+        ? `<span style="color:var(--muted);font-size:.8rem;">${escHtml(it.show_title)}</span> — ${escHtml(it.title)}`
+        : escHtml(it.title) + escHtml(year);
+      const tmdb = it.tmdb_id
+        ? `<a href="https://www.themoviedb.org/${it.type === 'movie' ? 'movie' : 'tv'}/${it.tmdb_id}" target="_blank" rel="noopener" style="font-size:.75rem;">TMDB</a>`
+        : '';
+
+      return `<tr data-idx="${idx}">
+        <td>${badge}</td>
+        <td>${titleCell}</td>
+        <td>${tmdb}</td>
+        <td style="white-space:nowrap;">
+          <button class="pl-link-btn pl-reserved-link-btn" data-idx="${idx}" title="Lier à un item Plex">🔗</button>
+          <button class="pl-remove-btn pl-reserved-remove-btn" data-idx="${idx}">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="pl-table">
+      <thead><tr>
+        <th>{{ t("playlist.col_type") }}</th>
+        <th>{{ t("playlist.col_trakt") }}</th>
+        <th></th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function bindReservedPanel() {
+    const panel = document.getElementById('pl-panel-reserved');
+    if (!panel) return;
+
+    panel.querySelectorAll('.pl-reserved-link-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx);
+        switchToTab('matched');
+        _linkIdx = idx;
+        renderMatchedTable();
+        const inp = document.getElementById(`pl-link-input-${idx}`);
+        if (inp) inp.focus();
+      });
+    });
+
+    panel.querySelectorAll('.pl-reserved-remove-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _items.splice(parseInt(btn.dataset.idx), 1);
+        renderMatchedTable();
+        updateMatchedCount();
+        syncReservedAndStats();
       });
     });
   }
@@ -976,6 +1099,7 @@
               });
               renderMatchedTable();
               updateMatchedCount();
+              syncReservedAndStats();
               row.style.opacity = '.4'; row.style.pointerEvents = 'none';
               pushBtn.style.display = '';
             });
@@ -1053,6 +1177,7 @@
               row.querySelector('span:last-child').textContent = '✓';
               renderMatchedTable();
               updateMatchedCount();
+              syncReservedAndStats();
               pushBtn.style.display = '';
             });
           });
