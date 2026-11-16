@@ -272,6 +272,40 @@ def match_trakt_items(plex, trakt_items: list) -> dict:
     return {"matched": matched, "unmatched": unmatched}
 
 
+# ── Partage de playlist (parité avec playlist_sync_to_users: all de Kometa) ────
+
+def _sync_playlist_to_users(plex, playlist):
+    """
+    Plex n'a pas de drapeau de partage pour les playlists : la seule façon de
+    la rendre visible à un autre usager Home/géré est d'en recréer une copie
+    sous son propre compte (c'est exactement ce que fait Kometa avec
+    playlist_sync_to_users: all — voir Playlist.copyToUser dans plexapi, qui
+    fait switchUser() puis recrée la playlist avec les mêmes items).
+    """
+    try:
+        account = plex.myPlexAccount()
+    except Exception:
+        logger.warning("[PLAYLIST] Impossible d'obtenir le compte Plex pour le partage de '%s'", playlist.title)
+        return
+
+    admin_username = account.username
+    for user in account.users():
+        if user is None or plex.machineIdentifier not in [s.machineIdentifier for s in user.servers]:
+            continue
+        username = user.title
+        if username == admin_username:
+            continue
+        try:
+            plex.switchUser(username).playlist(playlist.title).delete()
+        except Exception:
+            pass  # n'existait pas chez cet usager
+        try:
+            playlist.copyToUser(username)
+            logger.info("[PLAYLIST] Playlist '%s' partagée avec %s", playlist.title, username)
+        except Exception as e:
+            logger.warning("[PLAYLIST] Échec du partage de '%s' avec %s : %s", playlist.title, username, e)
+
+
 # ── Création de playlist ──────────────────────────────────────────────────────
 
 def create_or_update_playlist(plex, name: str, plex_items: list):
@@ -292,6 +326,7 @@ def create_or_update_playlist(plex, name: str, plex_items: list):
 
     playlist = plex.createPlaylist(name, items=plex_items)
     logger.info("[PLAYLIST] Playlist '%s' créée avec %d éléments", name, len(plex_items))
+    _sync_playlist_to_users(plex, playlist)
     return playlist
 
 
