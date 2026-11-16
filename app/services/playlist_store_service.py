@@ -69,6 +69,7 @@ def list_playlists() -> list:
             "id":        p["id"],
             "name":      p["name"],
             "trakt_url": p.get("trakt_url", ""),
+            "source":    p.get("source", ""),
             "updated_at": p.get("updated_at", ""),
             "total":     len(items),
             "available": sum(1 for it in items if it.get("available")),
@@ -77,9 +78,10 @@ def list_playlists() -> list:
     return result
 
 
-def upsert_playlist(name: str, trakt_url: str, items: list) -> str:
+def upsert_playlist(name: str, trakt_url: str, items: list, source: str = "") -> str:
     """
     Crée ou met à jour une playlist identifiée par son nom.
+    `source` : "" (Trakt/manuel) ou "default:<slug>" pour une playlist d'univers maison.
     Retourne l'ID de la playlist.
     """
     store = _load_store()
@@ -88,6 +90,7 @@ def upsert_playlist(name: str, trakt_url: str, items: list) -> str:
     if existing:
         existing["items"]      = items
         existing["trakt_url"]  = trakt_url or ""
+        existing["source"]     = source or ""
         existing["updated_at"] = now
         pid = existing["id"]
         logger.info("[STORE] Playlist '%s' mise à jour (%d items)", name, len(items))
@@ -97,6 +100,7 @@ def upsert_playlist(name: str, trakt_url: str, items: list) -> str:
             "id":         pid,
             "name":       name,
             "trakt_url":  trakt_url or "",
+            "source":     source or "",
             "created_at": now,
             "updated_at": now,
             "items":      items,

@@ -10,6 +10,9 @@ from ..services.playlist_service import (
 from ..services.playlist_store_service import (
     list_playlists, upsert_playlist, get_playlist, delete_playlist,
 )
+from ..services.playlist_defaults_service import (
+    list_default_playlists, load_default_playlist,
+)
 
 playlist_bp = Blueprint("playlist", __name__, url_prefix="/playlists")
 
@@ -59,28 +62,40 @@ def preview_playlist():
         current_app.logger.exception("[PLAYLIST] Erreur fetch Trakt")
         return jsonify({"ok": False, "error": f"Erreur Trakt : {exc}"}), 500
 
-    if not trakt_items:
-        return jsonify({
-            "ok": True, "list_name": list_name,
-            "total": 0, "matched": 0, "unmatched": 0,
-            "matched_items": [], "unmatched_items": [],
-        })
-
     try:
-        plex   = _get_local_server(plex_token)
-        report = match_trakt_items(plex, trakt_items)
+        result = _build_preview_response(plex_token, list_name, trakt_items)
     except Exception as exc:
         current_app.logger.exception("[PLAYLIST] Erreur matching Plex")
         return jsonify({"ok": False, "error": f"Erreur Plex : {exc}"}), 500
 
-    # Reconstruire l'ordre original Trakt avec matched/unmatched mélangés
+    return jsonify({"ok": True, **result})
+
+
+def _build_preview_response(plex_token: str, list_name: str, items: list) -> dict:
+    """
+    Matche `items` (forme normalisée Trakt/univers maison) contre Plex et
+    construit la réponse de preview partagée entre /playlists/preview et
+    /playlists/defaults/<slug>/preview. Peut lever une exception (connexion
+    Plex) — à catcher par l'appelant.
+    """
+    if not items:
+        return {
+            "list_name": list_name,
+            "total": 0, "matched": 0, "unmatched": 0,
+            "ordered_items": [], "unmatched_items": [],
+        }
+
+    plex   = _get_local_server(plex_token)
+    report = match_trakt_items(plex, items)
+
+    # Reconstruire l'ordre original avec matched/unmatched mélangés
     # Clé prioritaire : trakt_id (unique), fallback tmdb_id, fallback title+year
     matched_by_trakt   = {m["trakt"].get("trakt_id"): m for m in report["matched"] if m["trakt"].get("trakt_id")}
     matched_by_tmdb    = {m["trakt"].get("tmdb_id"):  m for m in report["matched"] if m["trakt"].get("tmdb_id")}
     matched_by_ty      = {(m["trakt"]["title"], m["trakt"].get("year")): m for m in report["matched"]}
 
     ordered_items = []
-    for item in trakt_items:
+    for item in items:
         m = (matched_by_trakt.get(item.get("trakt_id")) or
              matched_by_tmdb.get(item.get("tmdb_id")) or
              matched_by_ty.get((item["title"], item.get("year"))))
@@ -120,10 +135,9 @@ def preview_playlist():
 
         ordered_items.append(entry)
 
-    return jsonify({
-        "ok":          True,
+    return {
         "list_name":   list_name,
-        "total":       len(trakt_items),
+        "total":       len(items),
         "matched":     len(report["matched"]),
         "unmatched":   len(report["unmatched"]),
         "ordered_items": ordered_items,
@@ -142,7 +156,39 @@ def preview_playlist():
             }
             for u in report["unmatched"]
         ],
-    })
+    }
+
+
+@playlist_bp.route("/defaults")
+def defaults_list():
+    """Liste les playlists d'univers maison disponibles (app/playlist_defaults/)."""
+    if not session.get("logged_in"):
+        return jsonify({"ok": False, "error": "Non connecté"}), 401
+    return jsonify({"ok": True, "playlists": list_default_playlists()})
+
+
+@playlist_bp.route("/defaults/<slug>/preview", methods=["POST"])
+def defaults_preview(slug):
+    """Charge une playlist d'univers maison + matche contre Plex — sans créer la playlist."""
+    if not session.get("logged_in"):
+        return jsonify({"ok": False, "error": "Non connecté"}), 401
+
+    plex_token = session.get("plex_token")
+    if not plex_token:
+        return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
+
+    try:
+        list_name, items = load_default_playlist(slug)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+
+    try:
+        result = _build_preview_response(plex_token, list_name, items)
+    except Exception as exc:
+        current_app.logger.exception("[PLAYLIST DEFAULTS] Erreur matching Plex")
+        return jsonify({"ok": False, "error": f"Erreur Plex : {exc}"}), 500
+
+    return jsonify({"ok": True, "source": f"default:{slug}", **result})
 
 
 @playlist_bp.route("/push", methods=["POST"])
@@ -258,15 +304,16 @@ def save_playlist():
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
 
-    data  = request.get_json(silent=True) or {}
-    name  = (data.get("name") or "").strip()
-    items = data.get("items") or []
+    data   = request.get_json(silent=True) or {}
+    name   = (data.get("name") or "").strip()
+    items  = data.get("items") or []
+    source = (data.get("source") or "").strip()
 
     if not name:
         return jsonify({"ok": False, "error": "Nom de playlist manquant"}), 400
 
     try:
-        pid = upsert_playlist(name, data.get("trakt_url", ""), items)
+        pid = upsert_playlist(name, data.get("trakt_url", ""), items, source=source)
     except Exception as exc:
         current_app.logger.exception("[PLAYLIST] Erreur save")
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -366,6 +413,7 @@ def load_playlist(pid):
         "id":              pid,
         "name":            playlist["name"],
         "trakt_url":       playlist.get("trakt_url", ""),
+        "source":          playlist.get("source", ""),
         "items":           items,
         "newly_available": newly_available,
         "auto_pushed":     auto_pushed,
