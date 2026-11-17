@@ -38,6 +38,10 @@ from ..services.spotify_harvester_service import (
     start_spotify_job,
     check_spotdl_available,
 )
+from ..services.music_codec_label_service import (
+    get_job_status as get_music_codec_status,
+    start_music_codec_job,
+)
 
 logger = logging.getLogger(__name__)
 tools_bp = Blueprint("tools", __name__)
@@ -63,15 +67,34 @@ def _get_local_libraries(plex_token):
     return libs
 
 
+def _get_music_libraries(plex_token):
+    account = MyPlexAccount(token=plex_token)
+    server = next(
+        (s for s in account.resources()
+         if s.provides == "server" and getattr(s, "owned", False)),
+        None,
+    )
+    if not server:
+        return []
+    plex = server.connect()
+    return [
+        {"name": section.title, "type": section.type}
+        for section in plex.library.sections()
+        if section.type == "artist"
+    ]
+
+
 @tools_bp.route("/tools")
 def tools_page():
     if not session.get("logged_in"):
         return redirect(url_for("auth.login"))
 
     libraries = []
+    music_libraries = []
     error = None
     try:
         libraries = _get_local_libraries(session["plex_token"])
+        music_libraries = _get_music_libraries(session["plex_token"])
     except Exception as e:
         error = str(e)
         logger.warning(f"[Tools] impossible de lister les bibliothèques: {e}")
@@ -79,6 +102,7 @@ def tools_page():
     return render_template(
         "tools.html",
         libraries=libraries,
+        music_libraries=music_libraries,
         providers=STREAMING_PROVIDERS_CA,
         job_status=get_job_status(),
         rename_status=get_rename_job_status(),
@@ -89,6 +113,7 @@ def tools_page():
         spotify_status=get_spotify_job_status(),
         spotdl_available=check_spotdl_available(),
         spotify_output_dir=current_app.config.get("SPOTIFY_OUTPUT_DIR", ""),
+        music_codec_status=get_music_codec_status(),
         error=error,
         active_tool=request.args.get("tool", "streaming"),
     )
@@ -153,6 +178,63 @@ def label_stream():
                 sent += 1
 
             yield f"data: {json.dumps({'type': 'status', 'running': status['running'], 'done': status['done'], 'total': status['total'], 'processed': status['processed'], 'labeled': status['labeled'], 'skipped': status['skipped'], 'already_labeled': status['already_labeled'], 'errors': status['errors']})}\n\n"
+
+            if status["done"] and sent >= len(log):
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                break
+
+            time.sleep(1)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─── Codec Musique ──────────────────────────────────────────────────────────
+
+@tools_bp.route("/tools/music_codec/run", methods=["POST"])
+def music_codec_run():
+    if not session.get("logged_in"):
+        return jsonify({"error": "non authentifié"}), 401
+
+    status = get_music_codec_status()
+    if status["running"]:
+        return jsonify({"error": "job déjà en cours"}), 409
+
+    data = request.get_json(force=True)
+    library_name = data.get("library")
+    if not library_name:
+        return jsonify({"error": "aucune bibliothèque sélectionnée"}), 400
+
+    start_music_codec_job(session["plex_token"], library_name)
+    return jsonify({"ok": True})
+
+
+@tools_bp.route("/tools/music_codec/status")
+def music_codec_status():
+    if not session.get("logged_in"):
+        return jsonify({"error": "non authentifié"}), 401
+    return jsonify(get_music_codec_status())
+
+
+@tools_bp.route("/tools/music_codec/stream")
+def music_codec_stream():
+    if not session.get("logged_in"):
+        return redirect(url_for("auth.login"))
+
+    def generate():
+        sent = 0
+        while True:
+            status = get_music_codec_status()
+            log = status.get("log", [])
+
+            while sent < len(log):
+                yield f"data: {json.dumps({'type': 'log', 'msg': log[sent]})}\n\n"
+                sent += 1
+
+            yield f"data: {json.dumps({'type': 'status', 'running': status['running'], 'done': status['done'], 'total': status['total'], 'processed': status['processed'], 'labeled': status['labeled'], 'unchanged': status['unchanged'], 'errors': status['errors']})}\n\n"
 
             if status["done"] and sent >= len(log):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
