@@ -119,6 +119,10 @@
   </div>
 </header>
 
+<div class="tools-layout">
+{% include "_tools_sidebar.html" %}
+<main class="tools-content">
+
 <div id="create-form" style="display:none; margin-top:1rem; padding:1rem; background:var(--bg-elev-1); border:1px solid var(--border); border-radius:8px;">
   <label for="snap-label">{{ t("snapshots.label") }}</label>
   <div style="display:flex; gap:.5rem; margin-top:.4rem;">
@@ -346,4 +350,7 @@ function renderPartialShows(items) {
   return html + '</div>';
 }
 </script>
+
+</main>
+</div>
 {% endblock %}

@@ -3,52 +3,6 @@
 
 {% block head %}
 <style>
-  .tools-layout {
-    display: flex;
-    height: calc(100vh - var(--nav-h, 48px));
-  }
-  .tools-sidebar {
-    width: 200px;
-    flex-shrink: 0;
-    background: #1a1a2e;
-    border-right: 1px solid #333;
-    padding: 1rem 0;
-  }
-  .tools-sidebar-item {
-    display: block;
-    padding: 0.75rem 1.25rem;
-    color: #aaa;
-    text-decoration: none;
-    font-size: 0.9rem;
-    border-left: 3px solid transparent;
-    transition: all 0.15s;
-  }
-  .tools-sidebar-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
-  .tools-sidebar-item.active { color: #e5a00d; border-left-color: #e5a00d; background: rgba(229,160,13,0.08); }
-  .tools-sidebar-label { padding: 0.5rem 1.25rem; font-size: 0.7rem; text-transform: uppercase; color: #555; letter-spacing: 0.08em; }
-
-  .tools-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.5rem 2rem;
-  }
-  .tools-title {
-    font-size: 1.2rem;
-    font-weight: 600;
-    color: #e5a00d;
-    margin-bottom: 1.5rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #333;
-  }
-  .tools-section { margin-bottom: 1.5rem; }
-  .tools-section-label {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: #888;
-    margin-bottom: 0.5rem;
-  }
-
   .lib-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -282,34 +236,7 @@
 {% block content %}
 <div class="tools-layout">
 
-  <!-- Sidebar -->
-  <nav class="tools-sidebar">
-    <div class="tools-sidebar-label">Outils</div>
-    <a href="{{ url_for('tools.tools_page', tool='streaming') }}"
-       class="tools-sidebar-item {% if active_tool == 'streaming' %}active{% endif %}">
-      🏷️ Étiquettes streaming
-    </a>
-    <a href="{{ url_for('tools.tools_page', tool='rename') }}"
-       class="tools-sidebar-item {% if active_tool == 'rename' %}active{% endif %}">
-      ✏️ Rename Scene
-    </a>
-    <a href="{{ url_for('tools.tools_page', tool='multi_audio') }}"
-       class="tools-sidebar-item {% if active_tool == 'multi_audio' %}active{% endif %}">
-      🎵 Multi Audio Merger
-    </a>
-    <a href="{{ url_for('tools.tools_page', tool='spotify') }}"
-       class="tools-sidebar-item {% if active_tool == 'spotify' %}active{% endif %}">
-      🎧 Téléchargement Spotify
-    </a>
-    <a href="{{ url_for('tools.tools_page', tool='music_codec') }}"
-       class="tools-sidebar-item {% if active_tool == 'music_codec' %}active{% endif %}">
-      💿 Codec Musique
-    </a>
-    <a href="{{ url_for('tools.tools_page', tool='language_fix') }}"
-       class="tools-sidebar-item {% if active_tool == 'language_fix' %}active{% endif %}">
-      🌐 Correction langue
-    </a>
-  </nav>
+  {% include "_tools_sidebar.html" %}
 
   <!-- Contenu principal -->
   <main class="tools-content">

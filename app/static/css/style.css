@@ -93,6 +93,57 @@ body{
   text-align: center;
 }
 
+/* -- Tools sidebar layout (Outils, MKV, Snapshots, Playlists) ------------- */
+.tools-layout {
+  display: flex;
+  /* --header-h n'est non-nul que sur les pages ayant un <header> au-dessus
+     (Playlists, MKV, Snapshots) ; Outils n'en a pas et vaut 0. */
+  height: calc(100vh - var(--nav-h, 48px) - var(--header-h, 0px));
+}
+.tools-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: #1a1a2e;
+  border-right: 1px solid #333;
+  padding: 1rem 0;
+  overflow-y: auto;
+}
+.tools-sidebar-item {
+  display: block;
+  padding: 0.75rem 1.25rem;
+  color: #aaa;
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+.tools-sidebar-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
+.tools-sidebar-item.active { color: #e5a00d; border-left-color: #e5a00d; background: rgba(229,160,13,0.08); }
+.tools-sidebar-label { padding: 0.5rem 1.25rem; font-size: 0.7rem; text-transform: uppercase; color: #555; letter-spacing: 0.08em; }
+
+.tools-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+  max-width: none;
+  margin: 0;
+}
+.tools-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #e5a00d;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #333;
+}
+.tools-section { margin-bottom: 1.5rem; }
+.tools-section-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
 /* -- Layouts ------------------------------------------------------------- */
 header{
   max-width: 1200px;

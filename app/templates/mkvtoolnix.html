@@ -59,6 +59,9 @@
 {%- endmacro %}
 
 {% block content %}
+<div class="tools-layout">
+{% include "_tools_sidebar.html" %}
+<main class="tools-content">
 {% if not mkvtoolnix_configured %}
   <div class="warning-box">
     <h3>{{ t("mkv.config_required") }}</h3>
@@ -217,6 +220,8 @@
   </div>
 
 {% endif %}
+</main>
+</div>
 {% endblock %}
 
 {% block scripts %}
