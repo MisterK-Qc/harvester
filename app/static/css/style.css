@@ -128,6 +128,16 @@ body{
   max-width: none;
   margin: 0;
 }
+/* Le <header> global est position:sticky relatif au scroll de toute la page ;
+   nichée dans .tools-content (qui scroll elle-même), ça provoque un
+   chevauchement avec le contenu juste en dessous. On neutralise le sticky ici. */
+.tools-content > header {
+  position: static;
+  top: auto;
+  box-shadow: none;
+  max-width: none;
+  margin: 0 0 1rem;
+}
 .tools-title {
   font-size: 1.2rem;
   font-weight: 600;
