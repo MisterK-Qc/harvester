@@ -112,16 +112,16 @@
 {% endblock %}
 
 {% block content %}
+<div class="tools-layout">
+{% include "_tools_sidebar.html" %}
+<main class="tools-content">
+
 <header>
   <h1>{{ t("snapshots.title") }}</h1>
   <div class="button-group">
     <button id="btn-create-snap" class="button-primary">{{ t("snapshots.new") }}</button>
   </div>
 </header>
-
-<div class="tools-layout">
-{% include "_tools_sidebar.html" %}
-<main class="tools-content">
 
 <div id="create-form" style="display:none; margin-top:1rem; padding:1rem; background:var(--bg-elev-1); border:1px solid var(--border); border-radius:8px;">
   <label for="snap-label">{{ t("snapshots.label") }}</label>

@@ -154,13 +154,13 @@
 {% endblock %}
 
 {% block content %}
-<header>
-  <h1>{{ t("playlist.header") }}</h1>
-</header>
-
 <div class="tools-layout">
 {% include "_tools_sidebar.html" %}
 <main class="tools-content" style="padding: 0 1rem 2rem;">
+
+<header>
+  <h1>{{ t("playlist.header") }}</h1>
+</header>
 
   <!-- ── Playlists sauvegardées ── -->
   <div class="pl-saved-section">
