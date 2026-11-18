@@ -10,6 +10,7 @@ import logging
 import os
 
 from . import mkvtoolnix_service as mkv
+from .config_service import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,22 @@ def _display_title(item) -> str:
     return f"{item.title} ({year})" if year else item.title
 
 
+def _resolve_path(plex_path: str) -> str:
+    """
+    Traduit le chemin tel que rapporté par Plex vers un chemin accessible par ce
+    conteneur, via PLEX_PATH_FROM/PLEX_PATH_TO (Config > MKVToolNix). Nécessaire
+    quand Plex et Harvester tournent dans des conteneurs Docker séparés avec des
+    mappings de volumes différents pour la même bibliothèque (ex: Plex voit
+    /data/Film.mkv, Harvester voit /mnt/user/Plex/Film.mkv).
+    """
+    cfg = load_config()
+    prefix_from = cfg.get("PLEX_PATH_FROM", "")
+    prefix_to = cfg.get("PLEX_PATH_TO", "")
+    if prefix_from and plex_path.startswith(prefix_from):
+        return prefix_to + plex_path[len(prefix_from):]
+    return plex_path
+
+
 def probe_item(plex, rating_key: int, mkvmerge_path: str):
     """
     Retourne (titre_affiché, parts) où parts est la liste des fichiers de l'item
@@ -62,14 +79,33 @@ def probe_item(plex, rating_key: int, mkvmerge_path: str):
     part_idx = 0
     for media in item.media:
         for part in media.parts:
-            file_path = part.file or ""
+            plex_path = part.file or ""
+            file_path = _resolve_path(plex_path)
+            exists = os.path.isfile(file_path)
             is_mkv = file_path.lower().endswith(".mkv")
-            tracks = mkv.extract_languages(file_path, mkvmerge_path) if is_mkv else []
+
+            error = None
+            tracks = []
+            if not exists:
+                error = f"Fichier introuvable sur le conteneur Harvester : {file_path}"
+                if file_path != plex_path:
+                    error += f" (chemin Plex original : {plex_path})"
+                error += " — vérifie PLEX_PATH_FROM / PLEX_PATH_TO dans Config."
+            elif is_mkv:
+                tracks = mkv.extract_languages(file_path, mkvmerge_path)
+                if len(tracks) == 1 and tracks[0].get("lang_code") == "erreur":
+                    # Sentinelle extract_languages() : mkvmerge n'a pas pu lire le
+                    # fichier (corrompu ?) — ce n'est pas une vraie piste éditable.
+                    error = f"MKVToolNix n'a pas pu analyser ce fichier : {file_path}"
+                    tracks = []
+
             parts_out.append({
                 "part_index": part_idx,
                 "file":       file_path,
                 "filename":   os.path.basename(file_path),
                 "is_mkv":     is_mkv,
+                "exists":     exists,
+                "error":      error,
                 "tracks":     tracks,
             })
             part_idx += 1
@@ -89,7 +125,16 @@ def apply_fix(plex, rating_key: int, part_index: int, edits: list,
     if part_index < 0 or part_index >= len(flat_parts):
         raise ValueError("Fichier introuvable pour cet item")
 
-    file_path = flat_parts[part_index].file or ""
+    plex_path = flat_parts[part_index].file or ""
+    file_path = _resolve_path(plex_path)
+
+    if not os.path.isfile(file_path):
+        msg = f"Fichier introuvable sur le conteneur Harvester : {file_path}"
+        if file_path != plex_path:
+            msg += f" (chemin Plex original : {plex_path})"
+        msg += " — vérifie PLEX_PATH_FROM / PLEX_PATH_TO dans Config."
+        raise ValueError(msg)
+
     if not file_path.lower().endswith(".mkv"):
         raise ValueError("La correction de langue n'est possible que sur des fichiers MKV")
 

@@ -452,7 +452,10 @@ def set_audio_track_language(file_path: str, mkvpropedit_path: str,
     cmd = build_audio_language_edit_cmd(mkvpropedit_path, safe_path, track_index, new_lang)
     if not cmd:
         raise ValueError("Langue vide")
-    subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    if result.returncode != 0:
+        detail = (result.stdout or "").strip() or (result.stderr or "").strip() or "pas de détail"
+        raise RuntimeError(f"mkvpropedit (code {result.returncode}): {detail}")
 
 
 def get_mkv_status(languages: List[Dict]) -> str:

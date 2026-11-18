@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Outils — PlexHarvester{% endblock %}
+{% block title %}Outils — Harvester{% endblock %}
 
 {% block head %}
 <style>
@@ -301,6 +301,10 @@
        class="tools-sidebar-item {% if active_tool == 'spotify' %}active{% endif %}">
       🎧 Téléchargement Spotify
     </a>
+    <a href="{{ url_for('tools.tools_page', tool='music_codec') }}"
+       class="tools-sidebar-item {% if active_tool == 'music_codec' %}active{% endif %}">
+      💿 Codec Musique
+    </a>
     <a href="{{ url_for('tools.tools_page', tool='language_fix') }}"
        class="tools-sidebar-item {% if active_tool == 'language_fix' %}active{% endif %}">
       🌐 Correction langue
@@ -315,8 +319,9 @@
     <div class="tools-title">🏷️ Étiquettes streaming Plex</div>
     <p style="color:#aaa;font-size:0.85rem;margin-bottom:1.5rem;">
       Interroge TMDb par item pour ajouter automatiquement les étiquettes de service streaming
-      (Netflix, Prime Video, Disney+…) dans Plex. Compatible avec les collections Kometa
-      basées sur <code>plex_search: label: X</code>.
+      (Netflix, Prime Video, Disney+…) dans Plex. Compatible avec les collections et l'overlay
+      Kometa basés sur <code>plex_search: label: X</code>. Un item déjà étiqueté n'est plus
+      jamais retouché — chaque item n'est vérifié qu'une seule fois.
     </p>
 
     {% if error %}
@@ -370,6 +375,7 @@
       <div class="progress-stats">
         <span><b id="stat-processed">0</b> / <b id="stat-total">0</b> traités</span>
         <span>✅ <b id="stat-labeled">0</b> labellisés</span>
+        <span>🔒 <b id="stat-already-labeled">0</b> déjà étiquetés</span>
         <span>⏭ <b id="stat-skipped">0</b> sans ID</span>
         <span>❌ <b id="stat-errors">0</b> erreurs</span>
       </div>
@@ -757,6 +763,61 @@
         <span>❌ <b id="sp-failed">0</b> échouées</span>
       </div>
       <div class="log-box" id="spotify-log-box"></div>
+    </div>
+
+    {% elif active_tool == 'music_codec' %}
+    <!-- ======================== CODEC MUSIQUE ======================== -->
+    <div class="tools-title">💿 Codec Musique</div>
+    <p style="color:#aaa;font-size:0.85rem;margin-bottom:1.5rem;">
+      Lit le vrai codec audio (FLAC, MP3, AAC…) de chaque piste et pose une étiquette Plex
+      correspondante sur l'album. Contourne la limitation de Kometa, qui refuse l'attribut
+      <code>audio_codec</code> pour les bibliothèques musique — Kometa peut ensuite afficher
+      un badge via <code>plex_search: label: FLAC</code>, comme pour les services de streaming.
+      Contrairement au streaming, le codec ne change jamais tout seul : chaque run resynchronise
+      l'étiquette (ajoute si manquante, retire si le fichier a changé).
+    </p>
+
+    {% if error %}
+    <div style="background:#3a1a1a;border:1px solid #f44;border-radius:6px;padding:0.75rem 1rem;color:#f88;margin-bottom:1rem;font-size:0.85rem;">
+      ❌ {{ error }}
+    </div>
+    {% endif %}
+
+    <!-- Bibliothèque -->
+    <div class="tools-section">
+      <div class="tools-section-label">Bibliothèque musique</div>
+      {% if music_libraries %}
+      <div class="lib-grid" id="music-lib-grid">
+        {% for lib in music_libraries %}
+        <label class="lib-card">
+          <input type="radio" name="music-lib" class="music-lib-check" value="{{ lib.name }}" {% if loop.first %}checked{% endif %}>
+          <span>{{ lib.name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="color:#666;font-size:0.85rem;">Aucune bibliothèque musique trouvée.</p>
+      {% endif %}
+    </div>
+
+    <!-- Actions -->
+    <div class="tools-actions">
+      <button class="btn-run" id="btn-music-codec">▶ Lancer</button>
+      <span id="music-codec-status-txt" style="font-size:0.82rem;color:#aaa;"></span>
+    </div>
+
+    <!-- Progression -->
+    <div id="music-codec-progress-section" style="display:none;">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="music-codec-progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-stats">
+        <span><b id="mc-processed">0</b> / <b id="mc-total">0</b> albums</span>
+        <span>✅ <b id="mc-labeled">0</b> mis à jour</span>
+        <span>🔒 <b id="mc-unchanged">0</b> déjà à jour</span>
+        <span>❌ <b id="mc-errors">0</b> erreurs</span>
+      </div>
+      <div class="log-box" id="music-codec-log-box"></div>
     </div>
 
     {% elif active_tool == 'language_fix' %}
@@ -1283,6 +1344,104 @@
 })();
 </script>
 {% endif %}
+{% if active_tool == 'music_codec' %}
+<script>
+(function () {
+  const btnRun       = document.getElementById('btn-music-codec');
+  if (!btnRun) return;
+  const statusTxt    = document.getElementById('music-codec-status-txt');
+  const progressSec  = document.getElementById('music-codec-progress-section');
+  const progressFill = document.getElementById('music-codec-progress-fill');
+  const logBox       = document.getElementById('music-codec-log-box');
+
+  let es = null;
+
+  function updateStats(data) {
+    document.getElementById('mc-processed').textContent = data.processed ?? 0;
+    document.getElementById('mc-total').textContent     = data.total ?? 0;
+    document.getElementById('mc-labeled').textContent   = data.labeled ?? 0;
+    document.getElementById('mc-unchanged').textContent = data.unchanged ?? 0;
+    document.getElementById('mc-errors').textContent    = data.errors ?? 0;
+    const pct = Math.round(((data.processed || 0) / (data.total || 1)) * 100);
+    progressFill.style.width = pct + '%';
+  }
+
+  function appendLog(msg) {
+    const line = document.createElement('div');
+    if (msg.startsWith('✅')) line.className = 'log-ok';
+    else if (msg.startsWith('❌')) line.className = 'log-err';
+    else line.className = 'log-inf';
+    line.textContent = msg;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function startStream() {
+    if (es) { es.close(); es = null; }
+    es = new EventSource('/tools/music_codec/stream');
+    es.onmessage = function (e) {
+      const data = JSON.parse(e.data);
+      if (data.type === 'log') { appendLog(data.msg); }
+      else if (data.type === 'status') { updateStats(data); }
+      else if (data.type === 'done') {
+        es.close(); es = null;
+        btnRun.disabled = false;
+        statusTxt.textContent = 'Terminé.';
+      }
+    };
+    es.onerror = function () {
+      es.close(); es = null;
+      btnRun.disabled = false;
+      statusTxt.textContent = 'Connexion interrompue.';
+    };
+  }
+
+  fetch('/tools/music_codec/status')
+    .then(r => r.json())
+    .then(data => {
+      if (data.running) {
+        progressSec.style.display = 'block';
+        btnRun.disabled = true;
+        statusTxt.textContent = 'Job en cours…';
+        updateStats(data);
+        data.log.forEach(appendLog);
+        startStream();
+      }
+    });
+
+  btnRun.addEventListener('click', function () {
+    const checked = document.querySelector('.music-lib-check:checked');
+    if (!checked) { statusTxt.textContent = '❌ Sélectionne une bibliothèque.'; return; }
+
+    logBox.innerHTML = '';
+    progressFill.style.width = '0%';
+    progressSec.style.display = 'block';
+    btnRun.disabled = true;
+    statusTxt.textContent = 'Démarrage…';
+
+    fetch('/tools/music_codec/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library: checked.value }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          statusTxt.textContent = '❌ ' + data.error;
+          btnRun.disabled = false;
+        } else {
+          statusTxt.textContent = 'En cours…';
+          startStream();
+        }
+      })
+      .catch(() => {
+        statusTxt.textContent = '❌ Erreur réseau';
+        btnRun.disabled = false;
+      });
+  });
+})();
+</script>
+{% endif %}
 {% if active_tool == 'language_fix' %}
 <script>
 (function () {
@@ -1388,6 +1547,12 @@
           return;
         }
         partsEl.innerHTML = data.parts.map(part => {
+          if (part.error) {
+            return `<div class="lf-part-card">
+              <div class="lf-part-file">${escHtml(part.file)}</div>
+              <p style="color:#f88;font-size:0.82rem;">${escHtml(part.error)}</p>
+            </div>`;
+          }
           if (!part.is_mkv) {
             return `<div class="lf-part-card">
               <div class="lf-part-file">${escHtml(part.filename)}</div>
@@ -1469,6 +1634,7 @@
     document.getElementById('stat-processed').textContent = data.processed ?? 0;
     document.getElementById('stat-total').textContent = data.total ?? 0;
     document.getElementById('stat-labeled').textContent = data.labeled ?? 0;
+    document.getElementById('stat-already-labeled').textContent = data.already_labeled ?? 0;
     document.getElementById('stat-skipped').textContent = data.skipped ?? 0;
     document.getElementById('stat-errors').textContent = data.errors ?? 0;
     const total = data.total || 1;

@@ -289,6 +289,9 @@
 
   "config.mkvtoolnix_header":            "🎞️ MKVToolNix",
   "config.mkvtoolnix_directory":         "Chemin d'installation",
+  "config.plex_path_from":               "Préfixe Plex (à remplacer)",
+  "config.plex_path_to":                 "Préfixe équivalent pour Harvester",
+  "config.plex_path_hint":               "Si Plex et Harvester tournent dans des conteneurs différents, ils peuvent voir le même fichier sous des chemins différents (ex: Plex voit /data/Film.mkv, Harvester voit /mnt/user/Plex/Film.mkv). Utilisé par l'outil Correction langue pour traduire le chemin rapporté par Plex vers un chemin accessible par Harvester. Laisser vide si les deux chemins sont identiques.",
   "config.mkvtoolnix_default_audio":     "Langue audio par défaut",
   "config.mkvtoolnix_default_subtitle":  "Langue des sous-titres par défaut",
   "config.mkv_source_header":            "Sources MKV",

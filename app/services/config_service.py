@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     "EXCLUDED_LIBRARIES": [],
 
     "MKVTOOLNIX_BIN": "/usr/bin",
+    "PLEX_PATH_FROM": "",
+    "PLEX_PATH_TO": "",
     "DEFAULT_AUDIO_LANG": "fr-CA",
     "DEFAULT_SUBTITLE_LANG": "fr-CA",
 
@@ -163,6 +165,8 @@ def normalize_config(raw: dict | None) -> dict:
     cfg["SHOW_ONLY_LABELS"] = labels
 
     cfg["MKVTOOLNIX_BIN"] = str(raw.get("MKVTOOLNIX_BIN", cfg["MKVTOOLNIX_BIN"]) or "")
+    cfg["PLEX_PATH_FROM"] = str(raw.get("PLEX_PATH_FROM", "") or "").strip()
+    cfg["PLEX_PATH_TO"] = str(raw.get("PLEX_PATH_TO", "") or "").strip()
     cfg["DEFAULT_AUDIO_LANG"] = str(raw.get("DEFAULT_AUDIO_LANG", cfg["DEFAULT_AUDIO_LANG"]) or "fr-CA")
     _dsl = raw.get("DEFAULT_SUBTITLE_LANG", cfg["DEFAULT_SUBTITLE_LANG"])
     cfg["DEFAULT_SUBTITLE_LANG"] = str(_dsl) if _dsl is not None else "fr-CA"
@@ -348,6 +352,8 @@ def build_config_from_form(form) -> dict:
         ],
 
         "MKVTOOLNIX_BIN": form.get("mkvtoolnix_bin", ""),
+        "PLEX_PATH_FROM": form.get("plex_path_from", ""),
+        "PLEX_PATH_TO": form.get("plex_path_to", ""),
         "DEFAULT_AUDIO_LANG": form.get("default_audio_lang", "fr-CA"),
         "DEFAULT_SUBTITLE_LANG": form.get("default_subtitle_lang", "fr-CA"),
 

@@ -522,6 +522,19 @@
         </div>
         <div class="row-inline">
           <div style="flex:1">
+            <label for="plex_path_from">{{ t("config.plex_path_from") }}</label>
+            <input type="text" id="plex_path_from" name="plex_path_from"
+                   value="{{ config.get('PLEX_PATH_FROM','') }}" placeholder="/data" spellcheck="false">
+          </div>
+          <div style="flex:1">
+            <label for="plex_path_to">{{ t("config.plex_path_to") }}</label>
+            <input type="text" id="plex_path_to" name="plex_path_to"
+                   value="{{ config.get('PLEX_PATH_TO','') }}" placeholder="/mnt/user/Plex" spellcheck="false">
+          </div>
+        </div>
+        <p class="muted" style="margin:.3rem 0 0; font-size:.82rem;">{{ t("config.plex_path_hint") }}</p>
+        <div class="row-inline">
+          <div style="flex:1">
             <label for="default_audio_lang">{{ t("config.mkvtoolnix_default_audio") }}</label>
             <select id="default_audio_lang" name="default_audio_lang">
               {% set dal = config.get('DEFAULT_AUDIO_LANG','fr-CA') %}
