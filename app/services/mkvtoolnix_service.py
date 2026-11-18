@@ -59,6 +59,32 @@ def register_mkv_languages(new_codes: list) -> None:
                 pass
 
 
+ISO1_TO_ISO3 = {
+    "fr": "fra", "en": "eng", "es": "spa", "pt": "por",
+    "de": "deu", "it": "ita", "ja": "jpn", "ko": "kor",
+    "zh": "zho", "ru": "rus", "ar": "ara", "und": "und",
+}
+
+LANG_DISPLAY_NAMES = {
+    "fr-ca": "Français (Canada)",
+    "fr":    "Français",
+    "en-us": "English (US)",
+    "en-gb": "English (UK)",
+    "en":    "English",
+    "es":    "Español",
+    "pt-br": "Português (Brasil)",
+    "pt":    "Português",
+    "de":    "Deutsch",
+    "it":    "Italiano",
+    "ja":    "日本語",
+    "ko":    "한국어",
+    "zh":    "中文",
+    "ru":    "Русский",
+    "ar":    "العربية",
+    "nl":    "Nederlands",
+    "fil":   "Filipino",
+}
+
 VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov", ".mpeg")
 
 # StreamFab service name → scene abbreviation (most specific patterns first)
@@ -391,6 +417,42 @@ def extract_languages(file_path: str, mkvmerge_path: str) -> List[Dict]:
 
     except Exception:
         return []
+
+
+def build_audio_language_edit_cmd(mkvpropedit_path: str, safe_path: str,
+                                   track_index: int, new_lang: str) -> Optional[List[str]]:
+    """
+    Construit la commande mkvpropedit pour corriger la langue d'une piste audio
+    (track_index 1-based, tel que retourné par extract_languages). Retourne None
+    si new_lang est vide.
+    """
+    new_lang = (new_lang or "").strip()
+    if not new_lang:
+        return None
+    base = new_lang.split("-")[0].lower()
+    iso3 = ISO1_TO_ISO3.get(base, base[:3] if len(base) >= 3 else base)
+    track_name = LANG_DISPLAY_NAMES.get(new_lang.lower(), new_lang)
+    return [
+        mkvpropedit_path, safe_path,
+        "--edit", f"track:a{track_index}",
+        "--set", f"language-ietf={new_lang}",
+        "--set", f"language={iso3}",
+        "--set", f"name={track_name}",
+    ]
+
+
+def set_audio_track_language(file_path: str, mkvpropedit_path: str,
+                              track_index: int, new_lang: str) -> None:
+    """
+    Corrige l'étiquette de langue d'une piste audio directement sur un fichier
+    déjà présent dans la bibliothèque (par opposition à remux_file, qui traite
+    les fichiers encore dans l'inbox). Lève une exception si mkvpropedit échoue.
+    """
+    safe_path = to_win32_safe_path(file_path)
+    cmd = build_audio_language_edit_cmd(mkvpropedit_path, safe_path, track_index, new_lang)
+    if not cmd:
+        raise ValueError("Langue vide")
+    subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=60)
 
 
 def get_mkv_status(languages: List[Dict]) -> str:
@@ -1003,46 +1065,12 @@ def remux_file(
 
         # Appliquer les overrides de langue utilisateur
         if language_overrides:
-            _ISO1_TO_ISO3 = {
-                "fr": "fra", "en": "eng", "es": "spa", "pt": "por",
-                "de": "deu", "it": "ita", "ja": "jpn", "ko": "kor",
-                "zh": "zho", "ru": "rus", "ar": "ara", "und": "und",
-            }
-            _LANG_NAMES = {
-                "fr-ca": "Français (Canada)",
-                "fr":    "Français",
-                "en-us": "English (US)",
-                "en-gb": "English (UK)",
-                "en":    "English",
-                "es":    "Español",
-                "pt-br": "Português (Brasil)",
-                "pt":    "Português",
-                "de":    "Deutsch",
-                "it":    "Italiano",
-                "ja":    "日本語",
-                "ko":    "한국어",
-                "zh":    "中文",
-                "ru":    "Русский",
-                "ar":    "العربية",
-                "nl":    "Nederlands",
-                "fil":   "Filipino",
-            }
             for str_idx, new_lang in (language_overrides or {}).items():
                 try:
                     idx = int(str_idx)
-                    new_lang = (new_lang or "").strip()
-                    if not new_lang:
-                        continue
-                    base = new_lang.split("-")[0].lower()
-                    iso3 = _ISO1_TO_ISO3.get(base, base[:3] if len(base) >= 3 else base)
-                    track_name = _LANG_NAMES.get(new_lang.lower(), new_lang)
-                    _run([
-                        mkvpropedit_path, safe_dst,
-                        "--edit", f"track:a{idx}",
-                        "--set", f"language-ietf={new_lang}",
-                        "--set", f"language={iso3}",
-                        "--set", f"name={track_name}",
-                    ])
+                    cmd = build_audio_language_edit_cmd(mkvpropedit_path, safe_dst, idx, new_lang)
+                    if cmd:
+                        _run(cmd)
                 except Exception:
                     pass
 
