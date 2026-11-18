@@ -82,7 +82,7 @@ def probe_item(plex, rating_key: int, mkvmerge_path: str):
             plex_path = part.file or ""
             file_path = _resolve_path(plex_path)
             exists = os.path.isfile(file_path)
-            is_mkv = file_path.lower().endswith(".mkv")
+            is_mkv = file_path.lower().endswith(mkv.MATROSKA_EXTS)
 
             error = None
             tracks = []
@@ -135,8 +135,8 @@ def apply_fix(plex, rating_key: int, part_index: int, edits: list,
         msg += " — vérifie PLEX_PATH_FROM / PLEX_PATH_TO dans Config."
         raise ValueError(msg)
 
-    if not file_path.lower().endswith(".mkv"):
-        raise ValueError("La correction de langue n'est possible que sur des fichiers MKV")
+    if not file_path.lower().endswith(mkv.MATROSKA_EXTS):
+        raise ValueError("La correction de langue n'est possible que sur des fichiers Matroska (.mkv ou .webm)")
 
     for edit in edits:
         mkv.set_audio_track_language(

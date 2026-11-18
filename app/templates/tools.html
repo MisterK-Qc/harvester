@@ -824,10 +824,10 @@
     <!-- ======================== CORRECTION LANGUE ======================== -->
     <div class="tools-title">🌐 Correction langue</div>
     <p style="color:#aaa;font-size:0.85rem;margin-bottom:1.25rem;">
-      Corrige l'étiquette de langue d'une piste audio directement dans le fichier MKV d'un film ou
+      Corrige l'étiquette de langue d'une piste audio directement dans le fichier d'un film ou
       d'un épisode déjà présent dans la bibliothèque Plex. Plex affiche toujours la langue stockée
       dans le conteneur — impossible à corriger depuis son interface. Ne fonctionne que sur des
-      fichiers <code>.mkv</code>.
+      fichiers <code>.mkv</code> ou <code>.webm</code> (conteneur Matroska).
     </p>
 
     <div class="tools-section">
@@ -1556,7 +1556,7 @@
           if (!part.is_mkv) {
             return `<div class="lf-part-card">
               <div class="lf-part-file">${escHtml(part.filename)}</div>
-              <p style="color:#f88;font-size:0.82rem;">Fichier non-MKV — correction impossible.</p>
+              <p style="color:#f88;font-size:0.82rem;">Format non supporté (.mkv ou .webm seulement) — correction impossible.</p>
             </div>`;
           }
           const tracks = part.tracks.map(t => `

@@ -87,6 +87,10 @@ LANG_DISPLAY_NAMES = {
 
 VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov", ".mpeg")
 
+# .webm est un profil restreint du conteneur Matroska — mkvmerge/mkvpropedit
+# l'éditent exactement comme un .mkv.
+MATROSKA_EXTS = (".mkv", ".webm")
+
 # StreamFab service name → scene abbreviation (most specific patterns first)
 _SERVICE_TAG_MAP = [
     (re.compile(r'(?i)Amazon[.\s]?Prime[.\s]?Video'), 'AMZN'),
