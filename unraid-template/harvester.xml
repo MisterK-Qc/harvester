@@ -12,7 +12,7 @@
   <Category>MediaApp:Video</Category>
   <WebUI>http://[IP]:[PORT:5000]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/MisterK-Qc/harvester/main/unraid-template/harvester.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/MisterK-Qc/harvester/main/app/static/favicon.ico?v=2</Icon>
+  <Icon>https://raw.githubusercontent.com/MisterK-Qc/harvester/main/app/static/icon.ico</Icon>
 
   <Config Name="Web UI Port" Target="5000" Default="5000" Mode="tcp" Description="Port for the Harvester web interface." Type="Port" Display="always" Required="true" Mask="false">5000</Config>
 
