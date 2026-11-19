@@ -42,6 +42,15 @@ def create_app():
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
+    # Les cookies ne sont pas isolés par port, seulement par domaine — plusieurs
+    # instances sur le même host (ex: prod + beta + alpha sur des ports distincts)
+    # partageraient sinon le même cookie "session" et s'écraseraient entre elles.
+    # HOST_CONTAINERNAME est fourni automatiquement par Unraid sur chaque conteneur.
+    _container_name = os.environ.get("HOST_CONTAINERNAME", "").strip()
+    if _container_name:
+        _safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", _container_name)
+        app.config["SESSION_COOKIE_NAME"] = f"session_{_safe_name}"
+
     # Charger la config une seule fois
     app.config.update(load_config())
     app.config.setdefault("LANGUAGE", "fr")
