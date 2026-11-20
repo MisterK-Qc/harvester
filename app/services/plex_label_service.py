@@ -7,6 +7,8 @@ from pathlib import Path
 import requests
 from plexapi.myplex import MyPlexAccount
 
+from .tmdb_service import find_streaming_offers_tmdb
+
 logger = logging.getLogger(__name__)
 
 STREAMING_PROVIDERS_CA = {
@@ -113,6 +115,24 @@ def _get_label_from_filename(item, providers):
     return None
 
 
+def _get_label_by_title(title, year, media_type, api_key, providers):
+    """
+    Repli quand l'item n'a aucun <Guid> exposé par l'agent Plex (observé même sur des
+    films bien reconnus, pas seulement des ajouts récents mal matchés — ex. 'The Burbs',
+    qui a pourtant un résumé/une note complets). Recherche TMDb par titre+année, comme le
+    fait déjà le tableau de bord (tmdb_service.find_streaming_offers_tmdb), au lieu de
+    dépendre d'un ID déjà résolu par Plex.
+    """
+    stream_availability, _, _, _ = find_streaming_offers_tmdb(api_key, title, year or 0, media_type)
+    if not stream_availability:
+        return None
+    wanted = set(providers.values())
+    for name in stream_availability:
+        if name in wanted:
+            return name
+    return None
+
+
 def _get_streaming_labels(tmdb_id, media_type, api_key, watch_region, providers):
     url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/watch/providers"
     try:
@@ -181,17 +201,25 @@ def _worker(plex_token, api_key, library_configs, watch_region, providers):
                 label = _get_label_from_filename(item, providers)
                 source = "fichier"
 
-                # Étape 2 : fallback TMDb si aucun tag trouvé dans le fichier
+                # Étape 2 : fallback TMDb par ID (si l'agent Plex expose un <Guid> tmdb://)
                 if not label:
                     tmdb_id = _get_tmdb_id(item)
-                    if not tmdb_id:
-                        skipped += 1
-                        _update(processed=i + 1, skipped=skipped)
-                        time.sleep(0.05)
-                        continue
-                    services = _get_streaming_labels(tmdb_id, media_type, api_key, watch_region, providers)
-                    label = next(iter(services), None)
-                    source = "TMDb"
+                    if tmdb_id:
+                        services = _get_streaming_labels(tmdb_id, media_type, api_key, watch_region, providers)
+                        label = next(iter(services), None)
+                        source = "TMDb (guid)"
+
+                # Étape 3 : fallback TMDb par titre+année si aucun <Guid> n'est exposé —
+                # arrive plus souvent qu'on pense, même sur des items bien reconnus par Plex.
+                if not label:
+                    label = _get_label_by_title(item.title, getattr(item, "year", None), media_type, api_key, providers)
+                    source = "TMDb (titre+année)"
+
+                if not label:
+                    skipped += 1
+                    _update(processed=i + 1, skipped=skipped)
+                    time.sleep(0.05)
+                    continue
 
                 if label:
                     item.addLabel(label)
