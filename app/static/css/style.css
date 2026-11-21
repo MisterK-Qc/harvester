@@ -190,8 +190,9 @@ main{ max-width: 1100px; margin: 0 auto; padding: 12px 16px 28px; }
 
 /* Limiters for different pages (optional) */
 .page-dashboard main,
-.page-my-dashboard main,
-.page-mkvtoolnix main{ max-width: 1200px; }
+.page-my-dashboard main{ max-width: 1200px; }
+/* page-mkvtoolnix retiré : MKV vit maintenant dans .tools-layout/.tools-content
+   (barre latérale partagée), qui gère déjà sa propre largeur adaptative. */
 .page-config main{ max-width: none; padding-left: 1.5rem; padding-right: 1.5rem; }
 .page-config header{ max-width: none; }
 
