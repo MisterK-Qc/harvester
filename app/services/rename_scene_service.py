@@ -1113,7 +1113,11 @@ def build_scene_name(title, episode_tag, ep_title, resolution, service, source,
     parts = []
     if title:          parts.append(title)
     if movie_subtitle: parts.append("- " + movie_subtitle)
-    if episode_tag:    parts.append(episode_tag)
+    if episode_tag:
+        # Pour un film, episode_tag est en réalité l'année (réutilise ce champ
+        # faute de slot dédié) — Plex attend "(YYYY)", pas une année nue qui
+        # peut se confondre avec un numéro de titre (ex: "1917 1942" vs "1917 (1942)").
+        parts.append(episode_tag if is_episode else f"({episode_tag})")
     if ep_title:       parts.append(ep_title)
     if resolution:     parts.append(resolution)
     if service and source: parts.append(f"{service} {source}")
