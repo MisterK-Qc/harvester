@@ -25,6 +25,8 @@ STREAMING_PROVIDERS_CA = {
     73:  "Tubi TV",
     520: "Discovery Plus",
     11:  "MUBI",
+    192: "YouTube",          # TMDb "YouTube" (gratuit/ads)
+    188: "YouTube",          # TMDb "YouTube Premium" — même label, un seul badge YouTube
 }
 
 # Mapping tag scène → nom de label Plex (doit correspondre aux valeurs de STREAMING_PROVIDERS_CA)
@@ -42,6 +44,7 @@ _SCENE_TAG_TO_LABEL = {
     "TUBI":  "Tubi TV",
     "DSCP":  "Discovery Plus",
     "MUBI":  "MUBI",
+    "YT":    "YouTube",
 }
 
 # Regex qui détecte un tag scène entouré de délimiteurs (point, espace, tiret, début/fin)
