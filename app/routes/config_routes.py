@@ -74,6 +74,8 @@ def config_page():
             from ..services.config_service import load_config as _load_cfg
             existing = _load_cfg()
             cfg["PLEX_TOKEN_SCHEDULER"] = existing.get("PLEX_TOKEN_SCHEDULER", "")
+            # Idem pour l'admin : jamais modifiable depuis le formulaire
+            cfg["PLEX_ADMIN_ACCOUNT_ID"] = existing.get("PLEX_ADMIN_ACCOUNT_ID", "")
             cfg = save_config(cfg)
             current_app.config.update(cfg)
             _i18n_module._cache.clear()

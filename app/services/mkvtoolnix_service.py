@@ -476,6 +476,11 @@ def get_mkv_status(languages: List[Dict]) -> str:
 def find_source_path(relative_path: str, source_dirs: list[str]):
     for base in source_dirs:
         attempt = os.path.join(base, relative_path)
+        # Sécurité : refuser tout chemin qui sort du dossier source (../, chemin absolu, symlink)
+        real_base = os.path.realpath(base)
+        real_attempt = os.path.realpath(attempt)
+        if real_attempt != real_base and not real_attempt.startswith(real_base + os.sep):
+            continue
         if os.path.exists(attempt):
             return attempt, base
     return None, None

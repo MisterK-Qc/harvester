@@ -1,10 +1,13 @@
-from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
+from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, jsonify
 from plexapi.myplex import MyPlexAccount
 from plexapi.exceptions import Unauthorized, BadRequest
 from requests.exceptions import HTTPError
 from ..services.plex_service import connect_to_server
-from ..services.config_service import update_config_key
+from ..services.config_service import load_config, update_config_key
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -62,6 +65,48 @@ def _fetch_servers_from_token(plex_token):
     return servers
 
 
+class NotAdminError(Exception):
+    pass
+
+
+def _resolve_admin_account_id(account, resources):
+    """
+    Retourne l'ID du compte Plex administrateur de cette instance.
+
+    Un seul compte Plex (le propriétaire) a le droit d'utiliser Harvester. Si aucun
+    admin n'est encore enregistré (installation neuve ou mise à jour) :
+      1. migration : le compte du PLEX_TOKEN_SCHEDULER déjà enregistré devient l'admin ;
+      2. sinon : le premier compte qui se connecte ET possède un serveur Plex.
+    Pour changer d'admin : vider PLEX_ADMIN_ACCOUNT_ID dans config.json.
+    """
+    cfg = load_config()
+    admin_id = str(cfg.get("PLEX_ADMIN_ACCOUNT_ID") or "").strip()
+    if admin_id:
+        return admin_id
+
+    sched_token = str(cfg.get("PLEX_TOKEN_SCHEDULER") or "").strip()
+    if sched_token:
+        try:
+            admin_id = str(MyPlexAccount(token=sched_token).id)
+            logger.warning("[AUTH] Admin initialisé depuis PLEX_TOKEN_SCHEDULER (id=%s)", admin_id)
+        except Exception:
+            admin_id = ""
+
+    if not admin_id:
+        owns_server = any(
+            getattr(r, "provides", None) == "server" and getattr(r, "owned", False)
+            for r in resources
+        )
+        if not owns_server:
+            raise NotAdminError("Ce compte Plex ne possède aucun serveur Plex.")
+        admin_id = str(account.id)
+        logger.warning("[AUTH] Admin initialisé au premier login (id=%s)", admin_id)
+
+    update_config_key("PLEX_ADMIN_ACCOUNT_ID", admin_id)
+    current_app.config["PLEX_ADMIN_ACCOUNT_ID"] = admin_id
+    return admin_id
+
+
 def _find_selected_server_from_live_resources(plex_token, server_name):
     account = MyPlexAccount(token=plex_token)
     resources = account.resources()
@@ -89,20 +134,22 @@ def login():
             # IMPORTANT : c'est ici que le signin Plex se fait réellement
             account = MyPlexAccount(username, password)
             plex_token = account.authenticationToken
+            resources = account.resources()
+
+            # Seul le compte propriétaire de l'instance est autorisé
+            admin_id = _resolve_admin_account_id(account, resources)
+            if str(account.id) != admin_id:
+                logger.warning("[AUTH] Login refusé pour un compte non-admin : %s", username)
+                raise NotAdminError("Ce compte Plex n'est pas autorisé sur cette instance.")
 
             session.clear()
             session["plex_token"] = plex_token
             session["logged_in"] = True
             session["plex_username"] = username
+            session["auth_admin_id"] = admin_id
 
             # On profite du login réussi pour mettre les serveurs en cache
-            try:
-                resources = account.resources()
-                servers = _serialize_servers(resources)
-                _set_cached_servers(servers)
-            except Exception:
-                # Pas bloquant pour le login
-                pass
+            _set_cached_servers(_serialize_servers(resources))
 
             # Sauvegarder le token pour le scheduler de playlists (pas de session disponible en background)
             try:
@@ -112,6 +159,8 @@ def login():
 
             return redirect(url_for("auth.select_server"))
 
+        except NotAdminError as e:
+            error = str(e)
         except Exception as e:
             error = _extract_error_message(e)
 

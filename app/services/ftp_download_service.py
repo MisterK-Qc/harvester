@@ -190,8 +190,11 @@ def _guess_series_folder_from_filename(filename):
 
 def _build_local_path(filename, media_type="movie", ftp_id=None, season=None, episode=None, series_title=None,
                        create_dirs=True):
-    if not filename:
-        raise ValueError("filename manquant")
+    # Sécurité : le filename vient du client — ne garder que le nom de fichier,
+    # sans aucun composant de chemin (anti path traversal).
+    filename = os.path.basename(str(filename or "").replace("\\", "/"))
+    if not filename or filename in (".", ".."):
+        raise ValueError("filename manquant ou invalide")
 
     media_type_norm = str(media_type or "movie").lower()
     is_show = media_type_norm in {"show", "episode", "series"}
@@ -260,6 +263,12 @@ def _build_local_path(filename, media_type="movie", ftp_id=None, season=None, ep
 
     else:
         local_dir = base_dir
+
+    # Sécurité : le fichier final doit rester sous le dossier de téléchargement
+    real_base = os.path.realpath(base_dir)
+    real_target = os.path.realpath(os.path.join(local_dir, filename))
+    if not real_target.startswith(real_base + os.sep):
+        raise ValueError("Chemin de destination hors du dossier de téléchargement.")
 
     if create_dirs:
         os.makedirs(local_dir, exist_ok=True)

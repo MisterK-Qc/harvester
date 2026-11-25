@@ -210,6 +210,35 @@ def create_app():
     app.jinja_env.globals.update(getBitrateBadge=get_bitrate_badge)
 
     # ------------------------------------------------------------------
+    # Authentification globale : toute route exige une session admin valide,
+    # sauf le login/logout et les fichiers statiques. Une session sans
+    # auth_admin_id (créée avant ce contrôle) ou d'un autre compte est purgée.
+    # ------------------------------------------------------------------
+    _PUBLIC_ENDPOINTS = {"auth.login", "auth.logout", "static"}
+
+    @app.before_request
+    def _require_admin_session():
+        from flask import jsonify, redirect, request, url_for
+
+        endpoint = request.endpoint
+        if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
+            return None  # 404 géré par l'errorhandler ; routes publiques
+
+        admin_id = str(app.config.get("PLEX_ADMIN_ACCOUNT_ID") or "")
+        if (
+            session.get("logged_in")
+            and admin_id
+            and session.get("auth_admin_id") == admin_id
+        ):
+            return None
+
+        session.clear()
+        wants_html = request.method == "GET" and "text/html" in (request.headers.get("Accept") or "")
+        if wants_html:
+            return redirect(url_for("auth.login"))
+        return jsonify({"ok": False, "success": False, "error": "non authentifié"}), 401
+
+    # ------------------------------------------------------------------
     # Blueprints
     # ------------------------------------------------------------------
     from .routes import auth_bp, config_bp, dashboard_bp, my_dashboard_bp, mkv_bp, snapshot_bp, playlist_bp, tools_bp
