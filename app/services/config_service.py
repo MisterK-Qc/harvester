@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
     "PLAYLIST_AUTO_PUSH_SYNC": False,
     "PLEX_TOKEN_SCHEDULER":    "",
     "PLEX_ADMIN_ACCOUNT_ID":   "",
+    "PLEX_ADMIN_USERNAME":     "",
 
     "STREAMING_LABEL_AUTO_SYNC":                    False,
     "STREAMING_LABEL_AUTO_SYNC_INTERVAL_MINUTES":   60,
@@ -258,6 +259,7 @@ def normalize_config(raw: dict | None) -> dict:
     cfg["PLAYLIST_AUTO_PUSH_SYNC"] = _safe_bool(raw.get("PLAYLIST_AUTO_PUSH_SYNC"), False)
     cfg["PLEX_TOKEN_SCHEDULER"]    = str(raw.get("PLEX_TOKEN_SCHEDULER", "") or "")
     cfg["PLEX_ADMIN_ACCOUNT_ID"]   = str(raw.get("PLEX_ADMIN_ACCOUNT_ID", "") or "").strip()
+    cfg["PLEX_ADMIN_USERNAME"]     = str(raw.get("PLEX_ADMIN_USERNAME", "") or "").strip()
 
     cfg["STREAMING_LABEL_AUTO_SYNC"] = _safe_bool(raw.get("STREAMING_LABEL_AUTO_SYNC"), False)
     cfg["STREAMING_LABEL_AUTO_SYNC_INTERVAL_MINUTES"] = _safe_int(

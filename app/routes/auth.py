@@ -142,6 +142,15 @@ def login():
                 logger.warning("[AUTH] Login refusé pour un compte non-admin : %s", username)
                 raise NotAdminError("Ce compte Plex n'est pas autorisé sur cette instance.")
 
+            # Nom affiché sur la page Config — rafraîchi à chaque login (le nom Plex peut changer)
+            admin_name = str(getattr(account, "username", "") or username).strip()
+            if admin_name and current_app.config.get("PLEX_ADMIN_USERNAME") != admin_name:
+                try:
+                    update_config_key("PLEX_ADMIN_USERNAME", admin_name)
+                    current_app.config["PLEX_ADMIN_USERNAME"] = admin_name
+                except Exception:
+                    logger.exception("[AUTH] Erreur sauvegarde PLEX_ADMIN_USERNAME")
+
             session.clear()
             session["plex_token"] = plex_token
             session["logged_in"] = True

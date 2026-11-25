@@ -86,6 +86,15 @@
   <div id="config-save-message" style="display:none; margin-bottom:.5rem;"></div>
   {% if success_message %}<div class="success-box" aria-live="polite" style="margin-bottom:.5rem;">{{ success_message }}</div>{% endif %}
 
+  {% set _admin_id = config.get('PLEX_ADMIN_ACCOUNT_ID') %}
+  {% if _admin_id %}
+  <div class="admin-lock-line" title="Pour changer d'admin : vider PLEX_ADMIN_ACCOUNT_ID dans config.json"
+       style="margin-bottom:.75rem;font-size:.9rem;color:#4caf50;">
+    🔒 Admin : <strong>{{ config.get('PLEX_ADMIN_USERNAME') or ('ID ' ~ _admin_id) }}</strong>
+    <span style="opacity:.75;">(seul compte autorisé)</span>
+  </div>
+  {% endif %}
+
   <form method="POST" action="{{ url_for('config.config_page') }}" id="cfg-form" autocomplete="off">
   <div class="config-columns" id="config-columns">
   <div class="config-col locked" id="config-col-left">
