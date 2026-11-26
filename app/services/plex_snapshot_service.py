@@ -162,14 +162,92 @@ def _normalize(title):
     return "".join(ch.lower() for ch in (title or "") if ch.isalnum())
 
 
-def _item_key(item):
-    """Clé de matching : guid si dispo, sinon titre normalisé + année."""
-    guid = (item.get("guid") or "").strip()
-    if guid and not guid.startswith("local://"):
-        return f"guid:{guid}"
-    title = _normalize(item.get("title") or item.get("originalTitle") or "")
-    year = item.get("year") or ""
-    return f"title:{title}:{year}"
+def _items_by_type(snap, media_type):
+    """Tous les items d'un type, toutes bibliothèques confondues (un déplacement de bibliothèque n'est pas une perte)."""
+    return [
+        item
+        for lib in snap.get("libraries", [])
+        if lib.get("type") == media_type
+        for item in lib.get("items", [])
+    ]
+
+
+def _guid(item):
+    return (item.get("guid") or "").strip()
+
+
+def _titles(item):
+    return {t for t in (_normalize(item.get("title")), _normalize(item.get("originalTitle"))) if t}
+
+
+def _years_compatible(a, b):
+    """Année inconnue d'un côté, ou écart d'un an au plus (corrections de métadonnées Plex)."""
+    if not a or not b:
+        return True
+    try:
+        return abs(int(a) - int(b)) <= 1
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _match_items(ref_items, cur_items):
+    """
+    Associe chaque item de référence à un item actuel, du critère le plus sûr au plus souple :
+      1. GUID identique (local:// compris : même ID local = même item)
+      2. titre ou titre original + année identique
+      3. titre seul, si les années sont compatibles (une inconnue, ou ±1 an)
+    Le palier 3 couvre les items non identifiés par Plex (local://, année vide) puis rematchés
+    ou réimportés sous un nouvel ID. Logique d'ensemble : un item en double dans la référence
+    (ex. présent dans 2 bibliothèques) n'est pas « manquant » s'il existe encore une fois ;
+    on préfère seulement un item actuel pas encore associé, pour bien apparier les épisodes.
+    Retourne ([(ref, cur_ou_None), ...], {index des items actuels associés}).
+    """
+    by_guid, by_title_year, by_title = {}, {}, {}
+    for i, cur in enumerate(cur_items):
+        guid = _guid(cur)
+        if guid:
+            by_guid.setdefault(guid, []).append(i)
+        for t in _titles(cur):
+            by_title.setdefault(t, []).append(i)
+            if cur.get("year"):
+                by_title_year.setdefault((t, cur.get("year")), []).append(i)
+
+    used = set()
+    pairs = [None] * len(ref_items)
+
+    def _take(ref_idx, candidates):
+        if not candidates:
+            return False
+        i = next((c for c in candidates if c not in used), candidates[0])
+        used.add(i)
+        pairs[ref_idx] = (ref_items[ref_idx], cur_items[i])
+        return True
+
+    # Palier par palier sur tous les items, pour qu'un match sûr ne soit pas volé par un match souple
+    for idx, ref in enumerate(ref_items):
+        guid = _guid(ref)
+        if guid:
+            _take(idx, by_guid.get(guid, []))
+
+    for idx, ref in enumerate(ref_items):
+        if pairs[idx] is None and ref.get("year"):
+            for t in _titles(ref):
+                if _take(idx, by_title_year.get((t, ref.get("year")), [])):
+                    break
+
+    for idx, ref in enumerate(ref_items):
+        if pairs[idx] is not None:
+            continue
+        for t in _titles(ref):
+            candidates = [
+                i for i in by_title.get(t, [])
+                if _years_compatible(ref.get("year"), cur_items[i].get("year"))
+            ]
+            if _take(idx, candidates):
+                break
+
+    pairs = [p if p is not None else (ref_items[i], None) for i, p in enumerate(pairs)]
+    return pairs, used
 
 
 def diff_snapshots(snap_ref, snap_current):
@@ -184,36 +262,27 @@ def diff_snapshots(snap_ref, snap_current):
         "new_shows": [...],        # séries nouvelles dans current
       }
     """
-    def _index_by_type(snap, media_type):
-        index = {}
-        for lib in snap.get("libraries", []):
-            if lib.get("type") != media_type:
-                continue
-            for item in lib.get("items", []):
-                key = _item_key(item)
-                index[key] = item
-        return index
-
-    ref_movies = _index_by_type(snap_ref, "movie")
-    cur_movies = _index_by_type(snap_current, "movie")
-    ref_shows = _index_by_type(snap_ref, "show")
-    cur_shows = _index_by_type(snap_current, "show")
+    ref_movies = _items_by_type(snap_ref, "movie")
+    cur_movies = _items_by_type(snap_current, "movie")
+    ref_shows = _items_by_type(snap_ref, "show")
+    cur_shows = _items_by_type(snap_current, "show")
 
     # Films manquants / nouveaux
-    missing_movies = [ref_movies[k] for k in ref_movies if k not in cur_movies]
-    new_movies = [cur_movies[k] for k in cur_movies if k not in ref_movies]
+    movie_pairs, movie_matched_cur = _match_items(ref_movies, cur_movies)
+    missing_movies = [ref for ref, cur in movie_pairs if cur is None]
+    new_movies = [c for i, c in enumerate(cur_movies) if i not in movie_matched_cur]
 
     # Séries : manquantes entièrement ou partiellement
+    show_pairs, show_matched_cur = _match_items(ref_shows, cur_shows)
     missing_shows = []
     partial_shows = []
-    new_shows = [cur_shows[k] for k in cur_shows if k not in ref_shows]
+    new_shows = [c for i, c in enumerate(cur_shows) if i not in show_matched_cur]
 
-    for key, ref_show in ref_shows.items():
-        if key not in cur_shows:
+    for ref_show, cur_show in show_pairs:
+        if cur_show is None:
             missing_shows.append(ref_show)
             continue
 
-        cur_show = cur_shows[key]
         ref_eps = {(ep.get("season"), ep.get("episode")) for ep in ref_show.get("episodes", [])}
         cur_eps = {(ep.get("season"), ep.get("episode")) for ep in cur_show.get("episodes", [])}
 
@@ -231,6 +300,22 @@ def diff_snapshots(snap_ref, snap_current):
     # Trier par titre
     def _sort_title(x):
         return _normalize(x.get("title") or "")
+
+    # Un même titre en double (ex. 2 bibliothèques) n'est listé qu'une fois
+    def _dedupe(items):
+        seen, out = set(), []
+        for x in items:
+            key = _guid(x) or f"{_normalize(x.get('title'))}:{x.get('year') or ''}"
+            if key not in seen:
+                seen.add(key)
+                out.append(x)
+        return out
+
+    missing_movies = _dedupe(missing_movies)
+    new_movies = _dedupe(new_movies)
+    missing_shows = _dedupe(missing_shows)
+    partial_shows = _dedupe(partial_shows)
+    new_shows = _dedupe(new_shows)
 
     missing_movies.sort(key=_sort_title)
     new_movies.sort(key=_sort_title)
