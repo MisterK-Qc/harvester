@@ -238,7 +238,7 @@
                 </span>
               </td>
               <td><span class="lvl lvl-{{ r.level }}">{{ t("codec.level_" ~ r.level) }}</span></td>
-              <td data-gain="{{ r.gain }}">{% if r.gain %}{% if r.estimated %}≈ {% endif %}−{{ r.gain_h }}{% else %}—{% endif %}</td>
+              <td data-gain="{{ r.gain }}" title="{{ t('codec.basis_' ~ r.basis) }}">{% if r.gain %}{% if r.estimated %}≈ {% endif %}−{{ r.gain_h }}{% else %}—{% endif %}</td>
               <td class="codec-actions">
                 {% if r.skip %}
                   <span class="codec-via">{{ t("codec.skip_" ~ r.skip) }}{% if r.skip_date %} ({{ r.skip_date }}){% endif %}</span><br>
@@ -267,6 +267,7 @@
               <th>{{ t("codec.th_service") }}</th>
               {% for c in codec.all_codecs %}<th>{{ c | upper }}</th>{% endfor %}
               {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>HDR/DV</small></th>{% endfor %}
+              {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>kbps 1080p</small></th>{% endfor %}
             </tr>
           </thead>
           <tbody>
@@ -275,6 +276,7 @@
                 <td><strong>{{ s.name }}</strong> <span class="codec-via">{{ s.tag }}</span></td>
                 {% for c in codec.all_codecs %}<td><input type="checkbox" data-kind="codecs" value="{{ c }}" {% if c in s.codecs %}checked{% endif %}></td>{% endfor %}
                 {% for c in codec.all_codecs %}<td><input type="checkbox" data-kind="hdr_codecs" value="{{ c }}" {% if c in s.hdr_codecs %}checked{% endif %}></td>{% endfor %}
+                {% for c in codec.all_codecs %}<td><input type="number" min="0" max="200000" step="1" data-kind="bitrate" data-codec="{{ c }}" value="{{ (s.bitrates or {}).get(c, '') }}" placeholder="—" style="width:80px !important;"></td>{% endfor %}
               </tr>
             {% endfor %}
           </tbody>
@@ -650,6 +652,8 @@ document.addEventListener("DOMContentLoaded", function () {
         tmdb_names: JSON.parse(tr.dataset.tmdb || '[]'),
         codecs: [...tr.querySelectorAll('input[data-kind="codecs"]:checked')].map(i => i.value),
         hdr_codecs: [...tr.querySelectorAll('input[data-kind="hdr_codecs"]:checked')].map(i => i.value),
+        bitrates: Object.fromEntries([...tr.querySelectorAll('input[data-kind="bitrate"]')]
+          .filter(i => i.value).map(i => [i.dataset.codec, Number(i.value)])),
       }));
       const msg = document.getElementById('codec-svc-msg');
       try {

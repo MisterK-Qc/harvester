@@ -47,7 +47,8 @@ DEFAULT_CONFIG = {
     "max_codec": "av1",
     "services": [
         {"tag": "NF",   "name": "Netflix",            "tmdb_names": ["Netflix"],
-         "codecs": ["h264", "hevc", "vp9", "av1"], "hdr_codecs": ["hevc"]},
+         "codecs": ["h264", "hevc", "vp9", "av1"], "hdr_codecs": ["hevc"],
+         "bitrates": {"hevc": 1550, "av1": 3772}},
         {"tag": "AMZN", "name": "Amazon Prime Video", "tmdb_names": ["Amazon Prime Video", "Amazon Video"],
          "codecs": ["h264", "hevc", "av1"],        "hdr_codecs": ["hevc"]},
         {"tag": "DSNP", "name": "Disney+",            "tmdb_names": ["Disney Plus", "Disney+"],
@@ -176,6 +177,9 @@ def load_services_config() -> dict:
     data.setdefault("recheck_days", DEFAULT_CONFIG["recheck_days"])
     if data.get("max_codec") not in CODEC_RANK:
         data["max_codec"] = DEFAULT_CONFIG["max_codec"]
+    for svc in data["services"]:
+        if not isinstance(svc.get("bitrates"), dict):
+            svc["bitrates"] = {}
     return data
 
 
@@ -190,12 +194,21 @@ def save_services_config(payload: dict) -> dict:
         base = current.get(tag, {})
         codecs = [c for c in ALL_CODECS if c in (s.get("codecs") or [])]
         hdr_codecs = [c for c in ALL_CODECS if c in (s.get("hdr_codecs") or [])]
+        bitrates = {}
+        for c in ALL_CODECS:
+            try:
+                v = int(float((s.get("bitrates") or {}).get(c) or 0))
+            except (TypeError, ValueError):
+                v = 0
+            if 0 < v <= 200000:
+                bitrates[c] = v
         services.append({
             "tag": tag,
             "name": str(s.get("name") or base.get("name") or tag)[:60],
             "tmdb_names": [str(n)[:60] for n in (s.get("tmdb_names") or base.get("tmdb_names") or [])][:10],
             "codecs": codecs,
             "hdr_codecs": hdr_codecs,
+            "bitrates": bitrates,
         })
     try:
         recheck = max(1, min(3650, int(payload.get("recheck_days", DEFAULT_CONFIG["recheck_days"]))))
@@ -363,6 +376,29 @@ def _estimate_new_size(size, cur_rank, target_codec):
     return int(size * ratio) if ratio else None
 
 
+def _res_scale(res):
+    """Les débits de la table sont pour du 1080p ; facteur approximatif pour les autres résolutions."""
+    res = res or 1080
+    if res >= 2160:
+        return 2.5
+    if res >= 1440:
+        return 1.6
+    if res >= 1000:
+        return 1.0
+    if res >= 700:
+        return 0.55
+    return 0.3
+
+
+def _service_estimate(service, codec, item, cur_rank):
+    """(taille estimée, base) : base = "bitrate" (débit du service) ou "ratio" (efficacité du codec)."""
+    kbps = (service.get("bitrates") or {}).get(codec)
+    duration = item.get("duration")
+    if kbps and duration:
+        return int(kbps * 125 * (duration / 1000) * _res_scale(item.get("resolution"))), "bitrate"
+    return _estimate_new_size(item.get("size"), cur_rank, codec), "ratio"
+
+
 def _human(n):
     if not n:
         return "—"
@@ -415,14 +451,22 @@ def compute_upgrades(items, ftp_ids=None):
             continue
         hdr = bool(item.get("hdr"))
 
-        # Services offrant mieux que le codec actuel (en tenant compte du HDR)
+        size = item.get("size")
+
+        # Services offrant mieux que le codec actuel (HDR et codec max respectés).
+        # On retient le meilleur codec dont le fichier estimé reste plus petit que l'actuel :
+        # un AV1 à haut débit qui donnerait un fichier plus gros n'est pas proposé.
         better = {}
         for s in services:
             allowed = s.get("hdr_codecs", []) if hdr else s.get("codecs", [])
-            allowed = [c for c in allowed if codec_rank(c) <= max_rank]
-            best = max(allowed, key=codec_rank, default=None)
-            if best and codec_rank(best) > cur_rank:
-                better[s["tag"]] = (s, best)
+            allowed = sorted((c for c in allowed if cur_rank < codec_rank(c) <= max_rank),
+                             key=codec_rank, reverse=True)
+            for c in allowed:
+                est, basis = _service_estimate(s, c, item, cur_rank)
+                if size and est and est >= size:
+                    continue
+                better[s["tag"]] = (s, c, est, basis)
+                break
 
         # Preuves
         my_res = item.get("resolution") or 0
@@ -433,6 +477,8 @@ def compute_upgrades(items, ftp_ids=None):
 
         evidence = []
         for (_, codec, e_hdr, e_size, name, e_res) in _ftp_evidence(item, movies, series):
+            if item.get("type") != "show" and size and e_size and e_size >= size:
+                continue  # release plus grosse que le fichier actuel : aucun gain
             if cur_rank < codec_rank(codec) <= max_rank and (e_hdr or not hdr) and res_ok(e_res):
                 evidence.append({"src": "ftp", "codec": codec, "label": name, "size": e_size})
         if not hdr and item.get("guid"):
@@ -448,26 +494,29 @@ def compute_upgrades(items, ftp_ids=None):
                 avail.append(s["tag"])
 
         ev = None
+        svc_pick = None
         if evidence:
             level = "confirmed"
-            ev = max(evidence, key=lambda e: codec_rank(e["codec"]))
+            ev = max(evidence, key=lambda e: (codec_rank(e["codec"]), -(e.get("size") or 0)))
             target = ev["codec"]
             via = ev["label"]
             via_src = ev["src"]
         elif source and source in better:
-            level, target, via, via_src = "same", better[source][1], source, "service"
+            svc_pick = better[source]
+            level, target, via, via_src = "same", svc_pick[1], source, "service"
         elif avail:
-            tag = max(avail, key=lambda t: codec_rank(better[t][1]))
-            level, target, via, via_src = "possible", better[tag][1], ", ".join(avail), "service"
+            tag = max(avail, key=lambda t: (codec_rank(better[t][1]), -(better[t][2] or 0)))
+            svc_pick = better[tag]
+            level, target, via, via_src = "possible", svc_pick[1], ", ".join(avail), "service"
         else:
             continue
 
-        size = item.get("size")
-        new_size = None
         if ev and ev.get("size") and item.get("type") != "show":
-            new_size = ev["size"]
-        if new_size is None:
-            new_size = _estimate_new_size(size, cur_rank, target)
+            new_size, basis = ev["size"], "real"
+        elif svc_pick:
+            new_size, basis = svc_pick[2], svc_pick[3]
+        else:
+            new_size, basis = _estimate_new_size(size, cur_rank, target), "ratio"
         gain = max(0, size - new_size) if (size and new_size) else 0
 
         sig = _service_signature([better[t][0] for t in sorted(better)]) + f"-{max_rank}"
@@ -506,7 +555,8 @@ def compute_upgrades(items, ftp_ids=None):
             "hdr": hdr,
             "size": size,
             "size_h": _human(size),
-            "estimated": not (ev and ev.get("size") and item.get("type") != "show"),
+            "estimated": basis != "real",
+            "basis": basis,
             "target": target,
             "via": via,
             "via_src": via_src,

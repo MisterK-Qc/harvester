@@ -172,9 +172,10 @@ def my_dashboard():
                 resolution = parse_resolution(media_obj.videoResolution) or 0
                 profile = (getattr(media_obj, "videoProfile", "") or "").lower()
                 hdr = hdr_from_name(path) or (resolution >= 2160 and "10" in profile)
-                return {"path": path, "size": size, "hdr": bool(hdr)}
+                duration = int(getattr(media_obj, "duration", 0) or 0) or None
+                return {"path": path, "size": size, "hdr": bool(hdr), "duration": duration}
             except Exception:
-                return {"path": "", "size": None, "hdr": False}
+                return {"path": "", "size": None, "hdr": False, "duration": None}
 
         def get_media_resolution_info(media):
             try:
@@ -312,8 +313,11 @@ def my_dashboard():
                         finfo = get_file_info(file_media)
                         size = finfo["size"]
                         leaf = plex_episode_count if section.type == "show" else None
-                        if size and isinstance(leaf, int) and leaf > 1:
-                            size *= leaf  # estimation : 1er épisode x nombre d'épisodes
+                        duration = finfo["duration"]
+                        if isinstance(leaf, int) and leaf > 1:
+                            # estimation : 1er épisode x nombre d'épisodes
+                            size = size * leaf if size else size
+                            duration = duration * leaf if duration else duration
                         alt_title = (getattr(media, "title", None) or "").strip()
                         codec_items.append({
                             "title": title,
@@ -326,6 +330,7 @@ def my_dashboard():
                             "resolution": resolution,
                             "bitrate": bitrate,
                             "size": size,
+                            "duration": duration,
                             "hdr": finfo["hdr"],
                             "source_tag": source_tag_from_path(finfo["path"], source_tags),
                             "streams": sorted(stream_avail.keys()) if stream_avail else [],
