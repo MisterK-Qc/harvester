@@ -281,6 +281,14 @@
         </table>
       </div>
       <p style="margin-top:.6rem;">
+        <label>{{ t("codec.max_codec") }}
+          <select id="codec-max">
+            {% for c, lbl in [("av1", "AV1"), ("hevc", "HEVC / VP9"), ("h264", "H264")] %}
+              <option value="{{ c }}" {% if codec.config.max_codec == c %}selected{% endif %}>{{ lbl }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
         <label>{{ t("codec.recheck_days") }}
           <input type="number" id="codec-recheck" min="1" max="3650" value="{{ codec.config.recheck_days }}" style="width:90px !important;">
         </label>
@@ -648,7 +656,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const res = await fetch('{{ url_for("my_dashboard.codec_services") }}', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ services, recheck_days: document.getElementById('codec-recheck').value })
+          body: JSON.stringify({ services, max_codec: document.getElementById('codec-max').value, recheck_days: document.getElementById('codec-recheck').value })
         });
         if (!res.ok) throw new Error();
         msg.textContent = {{ t("codec.saved") | tojson }};

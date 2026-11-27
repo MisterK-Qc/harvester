@@ -44,6 +44,7 @@ _SIZE_RATIO = {
 
 DEFAULT_CONFIG = {
     "recheck_days": 90,
+    "max_codec": "av1",
     "services": [
         {"tag": "NF",   "name": "Netflix",            "tmdb_names": ["Netflix"],
          "codecs": ["h264", "hevc", "vp9", "av1"], "hdr_codecs": ["hevc"]},
@@ -173,6 +174,8 @@ def load_services_config() -> dict:
     if not isinstance(data, dict) or not isinstance(data.get("services"), list):
         return json.loads(json.dumps(DEFAULT_CONFIG))
     data.setdefault("recheck_days", DEFAULT_CONFIG["recheck_days"])
+    if data.get("max_codec") not in CODEC_RANK:
+        data["max_codec"] = DEFAULT_CONFIG["max_codec"]
     return data
 
 
@@ -198,7 +201,10 @@ def save_services_config(payload: dict) -> dict:
         recheck = max(1, min(3650, int(payload.get("recheck_days", DEFAULT_CONFIG["recheck_days"]))))
     except (TypeError, ValueError):
         recheck = DEFAULT_CONFIG["recheck_days"]
-    data = {"recheck_days": recheck, "services": services}
+    max_codec = payload.get("max_codec")
+    if max_codec not in CODEC_RANK:
+        max_codec = DEFAULT_CONFIG["max_codec"]
+    data = {"recheck_days": recheck, "max_codec": max_codec, "services": services}
     with _lock:
         _write_json(SERVICES_FILE, data)
     return data
@@ -374,6 +380,7 @@ def compute_upgrades(items, ftp_ids=None):
     config = load_services_config()
     services = config["services"]
     recheck_days = int(config.get("recheck_days", 90))
+    max_rank = CODEC_RANK.get(config.get("max_codec"), CODEC_RANK["av1"])
     skips = load_skips()
     now = datetime.now(timezone.utc)
 
@@ -412,6 +419,7 @@ def compute_upgrades(items, ftp_ids=None):
         better = {}
         for s in services:
             allowed = s.get("hdr_codecs", []) if hdr else s.get("codecs", [])
+            allowed = [c for c in allowed if codec_rank(c) <= max_rank]
             best = max(allowed, key=codec_rank, default=None)
             if best and codec_rank(best) > cur_rank:
                 better[s["tag"]] = (s, best)
@@ -425,11 +433,11 @@ def compute_upgrades(items, ftp_ids=None):
 
         evidence = []
         for (_, codec, e_hdr, e_size, name, e_res) in _ftp_evidence(item, movies, series):
-            if codec_rank(codec) > cur_rank and (e_hdr or not hdr) and res_ok(e_res):
+            if cur_rank < codec_rank(codec) <= max_rank and (e_hdr or not hdr) and res_ok(e_res):
                 evidence.append({"src": "ftp", "codec": codec, "label": name, "size": e_size})
         if not hdr and item.get("guid"):
             for codec, e_res, server in friends.get(item["guid"], []):
-                if codec_rank(codec) > cur_rank and res_ok(e_res):
+                if cur_rank < codec_rank(codec) <= max_rank and res_ok(e_res):
                     evidence.append({"src": "friend", "codec": codec, "label": server, "size": None})
 
         source = item.get("source_tag")
@@ -462,7 +470,7 @@ def compute_upgrades(items, ftp_ids=None):
             new_size = _estimate_new_size(size, cur_rank, target)
         gain = max(0, size - new_size) if (size and new_size) else 0
 
-        sig = _service_signature([better[t][0] for t in sorted(better)])
+        sig = _service_signature([better[t][0] for t in sorted(better)]) + f"-{max_rank}"
         key = item_key(item)
 
         skip = skips.get(key)

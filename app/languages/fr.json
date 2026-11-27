@@ -145,6 +145,7 @@
   "codec.services_title": "⚙️ Codecs offerts par service",
   "codec.services_hint": "Coche les codecs que ton outil de téléchargement peut obtenir pour chaque service. Colonnes HDR/DV : codecs disponibles en HDR ou Dolby Vision. Modifier un service réaffiche les titres « vérifiés » qui le concernent.",
   "codec.th_service": "Service",
+  "codec.max_codec": "Codec maximal à suggérer :",
   "codec.recheck_days": "Revérifier les titres « vérifiés » après (jours) :",
   "codec.save": "Enregistrer",
   "codec.saved": "Enregistré ✔",

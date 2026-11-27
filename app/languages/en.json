@@ -145,6 +145,7 @@
   "codec.services_title": "⚙️ Codecs offered per service",
   "codec.services_hint": "Tick the codecs your download tool can get for each service. HDR/DV columns: codecs available in HDR or Dolby Vision. Changing a service brings back the “checked” titles related to it.",
   "codec.th_service": "Service",
+  "codec.max_codec": "Highest codec to suggest:",
   "codec.recheck_days": "Recheck “checked” titles after (days):",
   "codec.save": "Save",
   "codec.saved": "Saved ✔",
