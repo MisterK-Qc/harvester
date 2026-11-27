@@ -1,3 +1,4 @@
+from html import escape as _html_escape
 import base64
 import logging
 import os
@@ -191,7 +192,7 @@ def create_app():
             "divx": "divx",
         }
         class_suffix = mapping.get(lower, "unknown")
-        return f'<span class="badge codec badge-{class_suffix}">{str(codec).upper()}</span>'
+        return f'<span class="badge codec badge-{class_suffix}">{_html_escape(str(codec).upper())}</span>'
 
     def get_bitrate_badge(bitrate):
         if not bitrate or not isinstance(bitrate, (int, float)) or bitrate == 0:
@@ -230,6 +231,8 @@ def create_app():
             and admin_id
             and session.get("auth_admin_id") == admin_id
         ):
+            # Anciennes sessions : le token Plex ne doit plus voyager dans le cookie
+            session.pop("plex_token", None)
             return None
 
         session.clear()

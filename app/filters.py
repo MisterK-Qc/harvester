@@ -1,3 +1,4 @@
+from html import escape as _html_escape
 import base64
 import re
 
@@ -45,7 +46,7 @@ def register_filters(app):
             'divx': 'divx'
         }
         class_suffix = mapping.get(lower, 'unknown')
-        return f'<span class="badge codec badge-{class_suffix}">{codec.upper()}</span>'
+        return f'<span class="badge codec badge-{class_suffix}">{_html_escape(str(codec).upper())}</span>'
 
     def get_bitrate_badge(bitrate):
         if not bitrate or not isinstance(bitrate, (int, float)) or bitrate == 0:

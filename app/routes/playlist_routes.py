@@ -13,6 +13,7 @@ from ..services.playlist_store_service import (
 from ..services.playlist_defaults_service import (
     list_default_playlists, load_default_playlist,
 )
+from ..services.plex_token_service import get_plex_token
 
 playlist_bp = Blueprint("playlist", __name__, url_prefix="/playlists")
 
@@ -41,7 +42,7 @@ def preview_playlist():
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
 
@@ -173,7 +174,7 @@ def defaults_preview(slug):
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
 
@@ -197,7 +198,7 @@ def push_playlist():
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
 
@@ -233,7 +234,7 @@ def plex_episodes(plex_key):
     """Retourne les épisodes d'une série Plex."""
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     try:
         plex = _get_local_server(plex_token)
         show = plex.fetchItem(plex_key)
@@ -260,7 +261,7 @@ def plex_search():
     """Recherche dans le Plex local (pour ajout manuel)."""
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     q       = (request.args.get("q") or "").strip()
     libtype = (request.args.get("type") or "").strip()
     if not q:
@@ -334,7 +335,7 @@ def load_playlist(pid):
     if not playlist:
         return jsonify({"ok": False, "error": "Playlist introuvable"}), 404
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     items = [dict(it) for it in playlist.get("items", [])]
     newly_available = 0
 
@@ -425,7 +426,7 @@ def list_plex_playlists():
     """Liste toutes les playlists existantes sur le serveur Plex local."""
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     try:
         plex = _get_local_server(plex_token)
         playlists = plex.playlists()
@@ -450,7 +451,7 @@ def plex_playlist_items_by_key(playlist_key):
     """Charge les items d'une playlist Plex existante."""
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     try:
         plex     = _get_local_server(plex_token)
         playlist = plex.fetchItem(playlist_key)
@@ -533,7 +534,7 @@ def sync_now():
     """Déclenche manuellement la sync des placeholders (même logique que le scheduler)."""
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
     try:

@@ -18,8 +18,35 @@ from ..services.ftp_alias_service import (
     load_aliases, save_manual_aliases_from_form,
     promote_alias, delete_alias
 )
+from ..services.plex_token_service import get_plex_token
 
 config_bp = Blueprint("config", __name__)
+
+
+def _keep_existing_secrets(cfg, existing):
+    """
+    La page Config n'affiche jamais les mots de passe FTP ni le secret Spotify
+    (ils ne quittent pas le serveur). Un champ laissé vide signifie donc
+    « ne pas changer » : on reprend la valeur déjà enregistrée.
+    """
+    old_pass_by_id = {
+        str(s.get("id") or ""): s.get("pass") or ""
+        for s in (existing.get("FTP_SERVERS") or [])
+        if isinstance(s, dict)
+    }
+    for srv in cfg.get("FTP_SERVERS") or []:
+        if isinstance(srv, dict) and not srv.get("pass"):
+            srv["pass"] = old_pass_by_id.get(str(srv.get("id") or ""), "")
+
+    if not cfg.get("SPOTIFY_CLIENT_SECRET"):
+        cfg["SPOTIFY_CLIENT_SECRET"] = existing.get("SPOTIFY_CLIENT_SECRET", "")
+
+
+def _stored_ftp_password(ftp_id):
+    for srv in current_app.config.get("FTP_SERVERS") or []:
+        if isinstance(srv, dict) and str(srv.get("id") or "") == str(ftp_id or ""):
+            return srv.get("pass") or ""
+    return ""
 
 @config_bp.route("/config", methods=["GET", "POST"])
 def config_page():
@@ -32,18 +59,7 @@ def config_page():
     plex_libraries = []
     plex_remote_servers = []
 
-    plex_token = session.get("plex_token")
-
-    # Sauvegarder le token pour le scheduler dès qu'on est sur la page config (session dispo)
-    if plex_token:
-        try:
-            from ..services.config_service import load_config as _load_cfg, update_config_key
-            _existing = _load_cfg()
-            if _existing.get("PLEX_TOKEN_SCHEDULER") != plex_token:
-                update_config_key("PLEX_TOKEN_SCHEDULER", plex_token)
-                current_app.config["PLEX_TOKEN_SCHEDULER"] = plex_token
-        except Exception:
-            current_app.logger.exception("[CONFIG] Erreur sauvegarde PLEX_TOKEN_SCHEDULER")
+    plex_token = get_plex_token()
 
     if plex_token:
         try:
@@ -77,6 +93,8 @@ def config_page():
             # Idem pour l'admin : jamais modifiable depuis le formulaire
             cfg["PLEX_ADMIN_ACCOUNT_ID"] = existing.get("PLEX_ADMIN_ACCOUNT_ID", "")
             cfg["PLEX_ADMIN_USERNAME"] = existing.get("PLEX_ADMIN_USERNAME", "")
+            # Les secrets ne sont jamais renvoyés au navigateur : champ vide = conserver l'existant
+            _keep_existing_secrets(cfg, existing)
             cfg = save_config(cfg)
             current_app.config.update(cfg)
             _i18n_module._cache.clear()
@@ -160,6 +178,9 @@ def test_ftp():
         port_raw = (form.get("ftp_port") or "21").strip()
         username = (form.get("ftp_user") or "").strip()
         password = form.get("ftp_pass") or ""
+        if not password and form.get("ftp_id"):
+            # Champ vide = mot de passe déjà enregistré (jamais renvoyé au navigateur)
+            password = _stored_ftp_password(form.get("ftp_id"))
         use_tls = "ftp_tls" in form
         passive = "ftp_passive" in form
 

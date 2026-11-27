@@ -37,6 +37,7 @@ from ..services.plex_service import connect_to_server
 
 import re
 from typing import Optional, Tuple
+from ..services.plex_token_service import get_plex_token
 
 
 def _normalize_match_title(title: str) -> str:
@@ -618,7 +619,7 @@ def mkvtoolnix_dashboard():
     deep = request.args.get("deep") == "1"
     lang_limit = 0 if deep else int(current_app.config.get("MKV_LANG_PROBES_LIMIT", 60))
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     plex_server = _get_local_plex_server(plex_token)
 
     # 2) Classement des catégories via Plex
@@ -845,7 +846,7 @@ def process_mkv():
         if not files_to_process:
             return jsonify({"status": "error", "message": "Aucun fichier vidéo trouvé"}), 400
 
-        plex_token = session.get("plex_token")
+        plex_token = get_plex_token()
         is_series_category = resolve_category_is_series(plex_token, category)
 
         forced_series_name = ""

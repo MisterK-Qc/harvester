@@ -21,6 +21,7 @@ from ..services.ftp_index_service import (
     load_ftp_index,
 )
 from ..services.ftp_download_service import episode_already_downloaded
+from ..services.plex_token_service import get_plex_token
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
@@ -485,7 +486,7 @@ def dashboard():
     if not session.get("logged_in"):
         return redirect(url_for("auth.login"))
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     selected_server_name = session.get("selected_server")
     selected_libraries = session.get("selected_libraries", [])
 

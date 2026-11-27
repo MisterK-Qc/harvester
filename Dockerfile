@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mkvtoolnix \
     mediainfo \
     ffmpeg \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=alass-builder /usr/local/cargo/bin/alass-cli /usr/local/bin/alass
@@ -52,7 +53,12 @@ LABEL org.opencontainers.image.title="Harvester" \
 
 EXPOSE 5000
 
-RUN mkdir -p /config /inbox /inbox/FTP
+RUN mkdir -p /config /inbox /inbox/FTP \
+    && sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && chmod 755 /app/docker-entrypoint.sh
+
+# PUID/PGID optionnels : voir docker-entrypoint.sh (sans eux, exécution en root comme avant)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://127.0.0.1:5000/login || exit 1

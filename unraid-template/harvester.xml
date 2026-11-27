@@ -26,6 +26,10 @@
 
   <Config Name="Timezone" Target="TZ" Default="America/Montreal" Mode="" Description="Container timezone (e.g. America/New_York, Europe/Paris)." Type="Variable" Display="always" Required="false" Mask="false">America/Montreal</Config>
 
+  <Config Name="PUID" Target="PUID" Default="" Mode="" Description="Optional: run the app as this user ID instead of root (Unraid: 99 = nobody). Requires PGID. Leave empty to keep running as root." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="PGID" Target="PGID" Default="" Mode="" Description="Optional: group ID used with PUID (Unraid: 100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
   <Config Name="Config Path (internal)" Target="HARVESTER_CONFIG_DIR" Default="/config" Mode="" Description="Internal path for configuration files. Do not change unless you have a specific reason." Type="Variable" Display="advanced" Required="false" Mask="false">/config</Config>
 
 </Container>

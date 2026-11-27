@@ -402,20 +402,26 @@ document.addEventListener("DOMContentLoaded", function () {
         });
         if (!res.ok) throw new Error('La recherche a échoué.');
         const data = await res.json();
-        let html = '<h4>Résultats pour "' + q + '"</h4>';
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        let html = '<h4>Résultats pour "' + esc(q) + '"</h4>';
         if (!Object.keys(data.streaming||{}).length && !Object.keys(data.purchase||{}).length) {
           html += '<p>Aucun service de streaming ou d\'achat trouvé.</p>';
         } else if (Object.keys(data.streaming||{}).length) {
           html += '<h5>Disponible en streaming sur :</h5><ul>';
           for (const [service, details] of Object.entries(data.streaming)) {
-            const logo = details?.logo ? `<img src="${details.logo}" class="service-logo" alt=""> ` : '';
-            html += `<li>${logo}${service}</li>`;
+            const logoUrl = String(details?.logo || '');
+            const logo = /^https:\/\//i.test(logoUrl) ? `<img src="${esc(logoUrl)}" class="service-logo" alt=""> ` : '';
+            html += `<li>${logo}${esc(service)}</li>`;
           }
           html += '</ul>';
         }
         box.innerHTML = html;
       } catch (e) {
-        box.innerHTML = '<p class="error">' + (e.message || 'Erreur') + '</p>';
+        box.textContent = '';
+        const p = document.createElement('p');
+        p.className = 'error';
+        p.textContent = e.message || 'Erreur';
+        box.appendChild(p);
       }
     });
   }

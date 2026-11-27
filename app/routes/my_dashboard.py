@@ -8,6 +8,7 @@ from ..services.plex_service import connect_to_server, get_video_bitrate
 from ..services.tmdb_service import find_streaming_offers_tmdb, normalize_service_name
 from ..services.stats_service import normalize_genre, parse_resolution, build_empty_stats, build_stats_context
 from ..services.cache_service import load_cache, save_cache, is_cache_valid
+from ..services.plex_token_service import get_plex_token
 
 my_dashboard_bp = Blueprint("my_dashboard", __name__)
 
@@ -23,7 +24,7 @@ def my_dashboard():
     if not session.get("logged_in"):
         return redirect(url_for("auth.login"))
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return redirect(url_for("auth.login"))
 

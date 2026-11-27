@@ -1,3 +1,4 @@
+import re
 import json
 import logging
 import time
@@ -44,6 +45,7 @@ from ..services.music_codec_label_service import (
 )
 from ..services.mkvtoolnix_service import get_mkvtoolnix_binaries, load_mkv_languages
 from ..services import language_fix_service
+from ..services.plex_token_service import get_plex_token
 
 logger = logging.getLogger(__name__)
 tools_bp = Blueprint("tools", __name__)
@@ -107,8 +109,8 @@ def tools_page():
     music_libraries = []
     error = None
     try:
-        libraries = _get_local_libraries(session["plex_token"])
-        music_libraries = _get_music_libraries(session["plex_token"])
+        libraries = _get_local_libraries(get_plex_token())
+        music_libraries = _get_music_libraries(get_plex_token())
     except Exception as e:
         error = str(e)
         logger.warning(f"[Tools] impossible de lister les bibliothèques: {e}")
@@ -157,7 +159,7 @@ def label_run():
     # Résoudre les media_types
     library_configs = []
     try:
-        libs = _get_local_libraries(session["plex_token"])
+        libs = _get_local_libraries(get_plex_token())
         type_map = {lib["name"]: "tv" if lib["type"] == "show" else "movie" for lib in libs}
         for name in library_names:
             mt = type_map.get(name, "movie")
@@ -166,7 +168,7 @@ def label_run():
         return jsonify({"error": str(e)}), 500
 
     api_key = current_app.config.get("TMDB_API_KEY", "")
-    start_label_job(session["plex_token"], api_key, library_configs, watch_region, providers)
+    start_label_job(get_plex_token(), api_key, library_configs, watch_region, providers)
     return jsonify({"ok": True})
 
 
@@ -223,7 +225,7 @@ def music_codec_run():
     if not library_name:
         return jsonify({"error": "aucune bibliothèque sélectionnée"}), 400
 
-    start_music_codec_job(session["plex_token"], library_name)
+    start_music_codec_job(get_plex_token(), library_name)
     return jsonify({"ok": True})
 
 
@@ -266,6 +268,34 @@ def music_codec_stream():
 
 # ─── Spotify Harvester ──────────────────────────────────────────────────────
 
+_SPOTDL_ALLOWED_HOSTS = {
+    "open.spotify.com", "play.spotify.com", "spotify.link",
+    "www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
+}
+
+
+def _is_valid_spotdl_url(value):
+    """
+    Accepte seulement des liens Spotify/YouTube (ou URI spotify:...). Empêche qu'une
+    entrée commençant par « - » soit interprétée comme une option de spotdl.
+    spotdl accepte aussi « lien_youtube|lien_spotify » : chaque partie est validée.
+    """
+    from urllib.parse import urlsplit
+    if len(value) > 2000:
+        return False
+    for part in value.split("|"):
+        part = part.strip()
+        if re.fullmatch(r"spotify:[A-Za-z]+:[A-Za-z0-9]+", part):
+            continue
+        try:
+            parsed = urlsplit(part)
+        except ValueError:
+            return False
+        if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() not in _SPOTDL_ALLOWED_HOSTS:
+            return False
+    return True
+
+
 @tools_bp.route("/tools/spotify/run", methods=["POST"])
 def spotify_run():
     if not session.get("logged_in"):
@@ -288,6 +318,9 @@ def spotify_run():
     urls = [str(u).strip() for u in (data.get("urls") or []) if str(u).strip()]
     if not urls:
         return jsonify({"error": "aucun lien Spotify fourni"}), 400
+    invalid = [u for u in urls if not _is_valid_spotdl_url(u)]
+    if invalid:
+        return jsonify({"error": f"lien refusé (Spotify ou YouTube seulement) : {invalid[0][:200]}"}), 400
 
     playlists = [
         {"url": u, "name": f"Lien {i + 1}", "format": "", "bitrate": ""}
@@ -544,7 +577,7 @@ def language_fix_search():
         return jsonify({"ok": True, "results": []})
 
     try:
-        plex = _get_local_plex(session.get("plex_token"))
+        plex = _get_local_plex(get_plex_token())
         if not plex:
             return jsonify({"ok": False, "error": "Serveur Plex local introuvable"}), 500
         results = language_fix_service.search_media(plex, q, libtype)
@@ -559,7 +592,7 @@ def language_fix_episodes(show_key):
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "non authentifié"}), 401
     try:
-        plex = _get_local_plex(session.get("plex_token"))
+        plex = _get_local_plex(get_plex_token())
         if not plex:
             return jsonify({"ok": False, "error": "Serveur Plex local introuvable"}), 500
         episodes = language_fix_service.list_episodes(plex, show_key)
@@ -579,7 +612,7 @@ def language_fix_probe(rating_key):
         return jsonify({"ok": False, "error": "MKVToolNix introuvable"}), 500
 
     try:
-        plex = _get_local_plex(session.get("plex_token"))
+        plex = _get_local_plex(get_plex_token())
         if not plex:
             return jsonify({"ok": False, "error": "Serveur Plex local introuvable"}), 500
         title, parts = language_fix_service.probe_item(plex, rating_key, mkvmerge_path)
@@ -607,7 +640,7 @@ def language_fix_apply():
         return jsonify({"ok": False, "error": "Paramètres manquants"}), 400
 
     try:
-        plex = _get_local_plex(session.get("plex_token"))
+        plex = _get_local_plex(get_plex_token())
         if not plex:
             return jsonify({"ok": False, "error": "Serveur Plex local introuvable"}), 500
         tracks = language_fix_service.apply_fix(

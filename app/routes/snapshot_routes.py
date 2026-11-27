@@ -7,6 +7,7 @@ from ..services.plex_snapshot_service import (
     delete_snapshot,
     diff_snapshots,
 )
+from ..services.plex_token_service import get_plex_token
 
 snapshot_bp = Blueprint("snapshot", __name__, url_prefix="/snapshots")
 
@@ -24,7 +25,7 @@ def create():
     if not session.get("logged_in"):
         return jsonify({"ok": False, "error": "Non connecté"}), 401
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return jsonify({"ok": False, "error": "Token Plex manquant"}), 401
 

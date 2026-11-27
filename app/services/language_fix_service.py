@@ -8,6 +8,7 @@ Plex, d'où cet outil.
 
 import logging
 import os
+import re
 
 from . import mkvtoolnix_service as mkv
 from .config_service import load_config
@@ -139,6 +140,9 @@ def apply_fix(plex, rating_key: int, part_index: int, edits: list,
         raise ValueError("La correction de langue n'est possible que sur des fichiers Matroska (.mkv ou .webm)")
 
     for edit in edits:
+        # Code de langue IETF (ex. fr, fr-CA, en-US) : rien d'autre ne doit atteindre mkvpropedit
+        if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}", str(edit.get("lang") or "")):
+            raise ValueError(f"Code de langue invalide : {str(edit.get('lang'))[:40]}")
         mkv.set_audio_track_language(
             file_path, mkvpropedit_path,
             track_index=int(edit["track_index"]),

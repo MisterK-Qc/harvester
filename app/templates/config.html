@@ -365,7 +365,7 @@
               </div>
               <div style="flex:1">
                 <label>{{ t("config.ftp_server_pass") }}</label>
-                <input type="password" class="srv-pass" value="{{ srv.get('pass','') }}" placeholder="{{ t('config.ftp_server_pass_placeholder') }}" spellcheck="false">
+                <input type="password" class="srv-pass" value="" autocomplete="new-password" placeholder="{{ '●●●●●● enregistré (vide = conserver)' if srv.get('pass') else t('config.ftp_server_pass_placeholder') }}" spellcheck="false">
               </div>
             </div>
             <div class="row-inline" style="align-items:center;">
@@ -669,7 +669,7 @@
           </div>
           <div style="flex:1">
             <label for="spotify_client_secret">Client Secret Spotify</label>
-            <input type="password" id="spotify_client_secret" name="spotify_client_secret" value="{{ config.get('SPOTIFY_CLIENT_SECRET','') }}" spellcheck="false">
+            <input type="password" id="spotify_client_secret" name="spotify_client_secret" value="" autocomplete="new-password" placeholder="{{ '●●●●●● enregistré (vide = conserver)' if config.get('SPOTIFY_CLIENT_SECRET') else '' }}" spellcheck="false">
           </div>
         </div>
         <p class="muted" style="margin:.3rem 0 0; font-size:.82rem;">
@@ -1098,6 +1098,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
       fd.append('ftp_port', block.querySelector('.srv-port')?.value || '21');
       fd.append('ftp_user', block.querySelector('.srv-user')?.value.trim() || '');
       fd.append('ftp_pass', block.querySelector('.srv-pass')?.value || '');
+      fd.append('ftp_id', block.querySelector('.srv-id')?.value.trim() || '');
       if (block.querySelector('.srv-tls')?.checked) fd.append('ftp_tls', '1');
       if (block.querySelector('.srv-passive')?.checked) fd.append('ftp_passive', '1');
       const res = await fetch('{{ url_for("config.test_ftp") }}', {

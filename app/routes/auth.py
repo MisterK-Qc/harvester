@@ -6,6 +6,7 @@ from ..services.plex_service import connect_to_server
 from ..services.config_service import load_config, update_config_key
 import logging
 import time
+from ..services.plex_token_service import get_plex_token
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def login():
     error = None
 
     # Si déjà connecté, on évite de repasser par le login
-    if request.method == "GET" and session.get("logged_in") and session.get("plex_token"):
+    if request.method == "GET" and session.get("logged_in") and get_plex_token():
         return redirect(url_for("auth.select_server"))
 
     if request.method == "POST":
@@ -151,20 +152,18 @@ def login():
                 except Exception:
                     logger.exception("[AUTH] Erreur sauvegarde PLEX_ADMIN_USERNAME")
 
+            # Token conservé côté serveur seulement (le cookie de session est lisible) ;
+            # sert aussi aux tâches planifiées, qui n'ont pas de session
+            update_config_key("PLEX_TOKEN_SCHEDULER", plex_token)
+            current_app.config["PLEX_TOKEN_SCHEDULER"] = plex_token
+
             session.clear()
-            session["plex_token"] = plex_token
             session["logged_in"] = True
             session["plex_username"] = username
             session["auth_admin_id"] = admin_id
 
             # On profite du login réussi pour mettre les serveurs en cache
             _set_cached_servers(_serialize_servers(resources))
-
-            # Sauvegarder le token pour le scheduler de playlists (pas de session disponible en background)
-            try:
-                update_config_key("PLEX_TOKEN_SCHEDULER", plex_token)
-            except Exception:
-                pass
 
             return redirect(url_for("auth.select_server"))
 
@@ -187,7 +186,7 @@ def select_server():
     if not session.get("logged_in"):
         return redirect(url_for("auth.login"))
 
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token:
         return redirect(url_for("auth.login"))
 
@@ -255,7 +254,7 @@ def get_libraries():
         return jsonify([])
 
     server_name = request.args.get("server")
-    plex_token = session.get("plex_token")
+    plex_token = get_plex_token()
     if not plex_token or not server_name:
         return jsonify([])
 
