@@ -17,6 +17,23 @@
     .tab-count { font-size:.78rem; font-weight:400; opacity:.7; margin-left:.3rem; }
     .tab.active .tab-count { opacity:1; }
     .filter-indicator { font-size:.8rem; color:var(--muted); margin:.2rem 0 .5rem; min-height:1em; }
+    .codec-cards { display:flex; flex-wrap:wrap; gap:.8rem; margin:1rem 0; }
+    .codec-card { flex:1 1 200px; border:1px solid var(--border); border-radius:var(--radius); padding:.8rem 1rem; cursor:pointer; }
+    .codec-card.active { border-color:var(--primary); }
+    .codec-card .n { font-size:1.6rem; font-weight:700; }
+    .codec-card .g { color:var(--txt-muted); font-size:.85rem; }
+    .codec-card .d { color:var(--txt-muted); font-size:.78rem; margin-top:.3rem; }
+    .lvl { display:inline-block; padding:2px 8px; border-radius:var(--radius-pill); font-size:.78rem; white-space:nowrap; }
+    .lvl-confirmed { background:#113b2d; color:#c3f3df; }
+    .lvl-same { background:#0f2c52; color:#cfe3ff; }
+    .lvl-possible { background:#3a3a3a; color:#eee; }
+    .codec-via { font-size:.78rem; color:var(--txt-muted); word-break:break-all; }
+    .codec-actions button { font-size:.75rem; padding:3px 8px; margin:1px; }
+    tr.codec-skipped { opacity:.5; }
+    .codec-svc-table td, .codec-svc-table th { text-align:center; }
+    .codec-svc-table td:first-child { text-align:left; }
+    .codec-svc-table input[type="checkbox"] { width:auto !important; }
+    .codec-hint { font-size:.82rem; color:var(--txt-muted); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 {% endblock %}
@@ -55,6 +72,7 @@
 
 <div class="tabs">
   <div class="tab active" data-tab-target="Statistiques">{{ t("mydashboard.tab_stats") }}</div>
+  <div class="tab" data-tab-target="Codecs">{{ t("codec.tab") }}{% if codec %}<span class="tab-count">({{ codec.summary.confirmed.count + codec.summary.same.count }})</span>{% endif %}</div>
   {% if tmdb_configured and watchlist_items %}
     <div class="tab" data-tab-target="Watchlist">{{ t("mydashboard.tab_watchlist") }}</div>
   {% endif %}
@@ -145,6 +163,132 @@
     {% if stats.get('show_genres') %}<div class="chart-wrapper"><canvas id="showGenreChart"></canvas></div>{% endif %}
     {% if stats.get('genres') %}<div class="chart-wrapper"><canvas id="genreChart"></canvas></div>{% endif %}
   </div>
+</div>
+
+<div class="tab-content" id="tab-Codecs">
+  <h2>{{ t("codec.title") }}</h2>
+  {% if not codec %}
+    <p style="text-align:center;">{{ t("codec.need_refresh") }}</p>
+  {% else %}
+    <p class="codec-hint">{{ t("codec.intro") }}</p>
+
+    <div class="codec-cards">
+      {% for lvl in ["confirmed", "same", "possible"] %}
+        <div class="codec-card" data-level="{{ lvl }}">
+          <span class="lvl lvl-{{ lvl }}">{{ t("codec.level_" ~ lvl) }}</span>
+          <div class="n">{{ codec.summary[lvl].count }}</div>
+          <div class="g">≈ {{ codec.summary[lvl].gain_h }} {{ t("codec.recoverable") }}</div>
+          <div class="d">{{ t("codec.level_" ~ lvl ~ "_desc") }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="filter-box" id="codec-filters">
+      <input type="search" id="codec-search" placeholder="{{ t('mydashboard.filter_placeholder') }}">
+      <select id="codec-level">
+        <option value="priority" selected>{{ t("codec.priority_levels") }}</option>
+        <option value="">{{ t("codec.all_levels") }}</option>
+        {% for lvl in ["confirmed", "same", "possible"] %}<option value="{{ lvl }}">{{ t("codec.level_" ~ lvl) }}</option>{% endfor %}
+      </select>
+      <select id="codec-type">
+        <option value="">{{ t("codec.all_types") }}</option>
+        <option value="movie">{{ t("mydashboard.search_movie") }}</option>
+        <option value="show">{{ t("mydashboard.search_tv") }}</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer;white-space:nowrap;">
+        <input type="checkbox" id="codec-show-hidden"> {{ t("codec.show_hidden", n=codec.hidden) }}
+      </label>
+    </div>
+    <p class="filter-indicator" id="codec-fi"></p>
+
+    {% if codec.rows %}
+    <div class="table-scroll">
+      <table class="sticky-table" id="codec-table">
+        <thead>
+          <tr>
+            <th>{{ t("mydashboard.th_title") }}</th>
+            <th>{{ t("mydashboard.th_year") }}</th>
+            <th>{{ t("codec.th_current") }}</th>
+            <th>{{ t("codec.th_target") }}</th>
+            <th>{{ t("codec.th_level") }}</th>
+            <th>{{ t("codec.th_gain") }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in codec.rows %}
+            <tr data-level="{{ r.level }}" data-type="{{ r.type }}" data-skip="{{ r.skip or '' }}"
+                data-key="{{ r.key }}" data-sig="{{ r.sig }}" class="{{ 'codec-skipped' if r.skip }}"
+                {% if r.skip %}style="display:none"{% endif %}>
+              <td>{{ r.title | underscore_to_dash }}<br><span class="codec-via">{{ r.lib }}</span></td>
+              <td>{{ r.year or "" }}</td>
+              <td>
+                <span class="badge codec badge-{{ r.codec }}">{{ r.codec | upper }}</span>
+                {% if r.resolution %}{{ r.resolution }}p{% endif %}
+                {% if r.hdr %}<span class="badge">HDR</span>{% endif %}
+                {% if r.source_tag %}<span class="badge">{{ r.source_tag }}</span>{% endif %}
+                <br><span class="codec-via">{{ r.size_h }}{% if r.type == "show" %} ≈{% endif %}</span>
+              </td>
+              <td>
+                <span class="badge codec badge-{{ r.target }}">{{ r.target | upper }}</span>
+                <br><span class="codec-via">
+                  {% if r.via_src == "ftp" %}📁 FTP : {{ r.via }}
+                  {% elif r.via_src == "friend" %}👥 {{ r.via }}
+                  {% else %}📺 {{ r.via }}{% endif %}
+                </span>
+              </td>
+              <td><span class="lvl lvl-{{ r.level }}">{{ t("codec.level_" ~ r.level) }}</span></td>
+              <td data-gain="{{ r.gain }}">{% if r.gain %}{% if r.estimated %}≈ {% endif %}−{{ r.gain_h }}{% else %}—{% endif %}</td>
+              <td class="codec-actions">
+                {% if r.skip %}
+                  <span class="codec-via">{{ t("codec.skip_" ~ r.skip) }}{% if r.skip_date %} ({{ r.skip_date }}){% endif %}</span><br>
+                  <button class="button-secondary" data-action="clear">{{ t("codec.btn_restore") }}</button>
+                {% else %}
+                  <button class="button-secondary" data-action="checked" title="{{ t('codec.btn_checked_tip') }}">{{ t("codec.btn_checked") }}</button>
+                  <button class="button-secondary" data-action="ignored" title="{{ t('codec.btn_ignored_tip') }}">{{ t("codec.btn_ignored") }}</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p style="text-align:center;">{{ t("codec.none") }}</p>
+    {% endif %}
+
+    <h4 class="collapsible-header" style="margin-top:2rem;">{{ t("codec.services_title") }} <span class="toggle-icon">+</span></h4>
+    <div class="collapsible-content" style="display:none;">
+      <p class="codec-hint">{{ t("codec.services_hint") }}</p>
+      <div class="table-scroll">
+        <table class="sticky-table codec-svc-table" id="codec-svc-table">
+          <thead>
+            <tr>
+              <th>{{ t("codec.th_service") }}</th>
+              {% for c in codec.all_codecs %}<th>{{ c | upper }}</th>{% endfor %}
+              {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>HDR/DV</small></th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in codec.config.services %}
+              <tr data-tag="{{ s.tag }}" data-name="{{ s.name }}" data-tmdb="{{ s.tmdb_names | tojson | forceescape }}">
+                <td><strong>{{ s.name }}</strong> <span class="codec-via">{{ s.tag }}</span></td>
+                {% for c in codec.all_codecs %}<td><input type="checkbox" data-kind="codecs" value="{{ c }}" {% if c in s.codecs %}checked{% endif %}></td>{% endfor %}
+                {% for c in codec.all_codecs %}<td><input type="checkbox" data-kind="hdr_codecs" value="{{ c }}" {% if c in s.hdr_codecs %}checked{% endif %}></td>{% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:.6rem;">
+        <label>{{ t("codec.recheck_days") }}
+          <input type="number" id="codec-recheck" min="1" max="3650" value="{{ codec.config.recheck_days }}" style="width:90px !important;">
+        </label>
+        <button class="button-primary" id="codec-svc-save">{{ t("codec.save") }}</button>
+        <span id="codec-svc-msg" class="codec-hint"></span>
+      </p>
+    </div>
+  {% endif %}
 </div>
 
 {% if tmdb_configured %}
@@ -426,7 +570,96 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  const topServiceLabels = {{ stats.top_services | map(attribute=0) | list | tojson }};
+  // ─── Onglet Codecs ───────────────────────────────────────────────
+  const codecTable = document.getElementById('codec-table');
+  if (codecTable) {
+    const rows = [...codecTable.querySelectorAll('tbody tr')];
+    const search = document.getElementById('codec-search');
+    const levelSel = document.getElementById('codec-level');
+    const typeSel = document.getElementById('codec-type');
+    const showHidden = document.getElementById('codec-show-hidden');
+    const fi = document.getElementById('codec-fi');
+    const applyCodecFilter = () => {
+      const q = (search.value || '').toLowerCase();
+      const lvl = levelSel.value, typ = typeSel.value, sh = showHidden.checked;
+      let visible = 0;
+      rows.forEach(r => {
+        const ok = (!q || r.cells[0].textContent.toLowerCase().includes(q))
+          && (!lvl || r.dataset.level === lvl || (lvl === 'priority' && r.dataset.level !== 'possible'))
+          && (!typ || r.dataset.type === typ)
+          && (sh || !r.dataset.skip);
+        r.style.display = ok ? '' : 'none';
+        if (ok) visible++;
+      });
+      fi.textContent = `${visible} / ${rows.length}`;
+      document.querySelectorAll('.codec-card').forEach(c => c.classList.toggle('active',
+        c.dataset.level === lvl || (lvl === 'priority' && c.dataset.level !== 'possible')));
+    };
+    [search, levelSel, typeSel, showHidden].forEach(el => el.addEventListener(el === search ? 'input' : 'change', applyCodecFilter));
+    document.querySelectorAll('.codec-card').forEach(card => card.addEventListener('click', () => {
+      levelSel.value = levelSel.value === card.dataset.level ? 'priority' : card.dataset.level;
+      applyCodecFilter();
+    }));
+
+    applyCodecFilter();
+
+    codecTable.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      btn.disabled = true;
+      try {
+        const res = await fetch('{{ url_for("my_dashboard.codec_skip") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: tr.dataset.key, sig: tr.dataset.sig, level: tr.dataset.level, action: btn.dataset.action })
+        });
+        if (!res.ok) throw new Error();
+        if (btn.dataset.action === 'clear') {
+          tr.dataset.skip = '';
+          tr.classList.remove('codec-skipped');
+          tr.querySelector('.codec-actions').innerHTML = {{ t("codec.restored") | tojson }};
+        } else {
+          tr.dataset.skip = btn.dataset.action;
+          tr.classList.add('codec-skipped');
+          tr.querySelector('.codec-actions').textContent = btn.dataset.action === 'checked'
+            ? {{ t("codec.skip_checked") | tojson }} : {{ t("codec.skip_ignored") | tojson }};
+        }
+        applyCodecFilter();
+      } catch (e) {
+        btn.disabled = false;
+        alert({{ t("codec.save_error") | tojson }});
+      }
+    });
+  }
+
+  const svcSave = document.getElementById('codec-svc-save');
+  if (svcSave) {
+    svcSave.addEventListener('click', async () => {
+      const services = [...document.querySelectorAll('#codec-svc-table tbody tr')].map(tr => ({
+        tag: tr.dataset.tag,
+        name: tr.dataset.name,
+        tmdb_names: JSON.parse(tr.dataset.tmdb || '[]'),
+        codecs: [...tr.querySelectorAll('input[data-kind="codecs"]:checked')].map(i => i.value),
+        hdr_codecs: [...tr.querySelectorAll('input[data-kind="hdr_codecs"]:checked')].map(i => i.value),
+      }));
+      const msg = document.getElementById('codec-svc-msg');
+      try {
+        const res = await fetch('{{ url_for("my_dashboard.codec_services") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ services, recheck_days: document.getElementById('codec-recheck').value })
+        });
+        if (!res.ok) throw new Error();
+        msg.textContent = {{ t("codec.saved") | tojson }};
+        setTimeout(() => location.reload(), 600);
+      } catch (e) {
+        msg.textContent = {{ t("codec.save_error") | tojson }};
+      }
+    });
+  }
+
+  const topServiceLabels ={{ stats.top_services | map(attribute=0) | list | tojson }};
   const topServiceCounts = {{ stats.top_services | map(attribute=1) | list | tojson }};
   new Chart(document.getElementById('topServicesChart'), {
     type: 'bar',

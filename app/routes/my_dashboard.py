@@ -9,6 +9,32 @@ from ..services.tmdb_service import find_streaming_offers_tmdb, normalize_servic
 from ..services.stats_service import normalize_genre, parse_resolution, build_empty_stats, build_stats_context
 from ..services.cache_service import load_cache, save_cache, is_cache_valid
 from ..services.plex_token_service import get_plex_token
+from ..services.codec_upgrade_service import (
+    compute_upgrades, hdr_from_name, source_tag_from_path, load_services_config,
+    save_services_config, set_skip,
+)
+
+# Tags de service reconnus dans les noms de fichiers (en plus de ceux de la table)
+_KNOWN_SOURCE_TAGS = {
+    "NF", "AMZN", "DSNP", "ATVP", "HMAX", "MAX", "HULU", "PMTP", "PCOK", "CRAV",
+    "ILCO", "TUBI", "MUBI", "CR", "FUNI", "SHO", "STRZ", "NOOVO", "TOUTV", "STAN",
+}
+
+
+def _ftp_ids():
+    return [s.get("id") for s in (current_app.config.get("FTP_SERVERS") or []) if s.get("id")]
+
+
+def _codec_context(data):
+    """Calcule la section « Codecs » à partir des données (cache ou analyse fraîche)."""
+    items = data.get("codec_items")
+    if items is None:
+        return None  # cache antérieur à la fonctionnalité → rafraîchir
+    try:
+        return compute_upgrades(items, _ftp_ids())
+    except Exception:
+        current_app.logger.exception("[MY_DASHBOARD] Échec du calcul des gains de codec")
+        return None
 
 my_dashboard_bp = Blueprint("my_dashboard", __name__)
 
@@ -100,7 +126,8 @@ def my_dashboard():
                 results_stream=data["results_stream"],
                 results_purchase=data["results_purchase"],
                 watchlist_items=data["watchlist_items"],
-                stats=data["stats"]
+                stats=data["stats"],
+                codec=_codec_context(data),
             )
 
         # Pas de cache valide → acquérir le lock avant l'analyse longue
@@ -115,6 +142,8 @@ def my_dashboard():
         results_stream_by_lib = {}
         results_purchase_by_lib = {}
         watchlist_items = []
+        codec_items = []
+        source_tags = _KNOWN_SOURCE_TAGS | {s["tag"] for s in load_services_config()["services"]}
 
         total_items = 0
         total_movies = 0
@@ -128,6 +157,25 @@ def my_dashboard():
         movie_genre_counter = Counter()
         show_genre_counter = Counter()
 
+        def get_file_info(media):
+            """Fichier, taille (octets) et HDR du premier média — déjà présents dans le listing Plex."""
+            try:
+                media_obj = media.media[0]
+                parts = getattr(media_obj, "parts", None) or []
+                path = parts[0].file if parts else ""
+                size = sum(int(getattr(p, "size", 0) or 0) for p in parts) or None
+                if not size:
+                    bitrate = getattr(media_obj, "bitrate", None)
+                    duration = getattr(media_obj, "duration", None)
+                    if bitrate and duration:
+                        size = int(bitrate) * 125 * int(duration) // 1000  # kbps x s -> octets
+                resolution = parse_resolution(media_obj.videoResolution) or 0
+                profile = (getattr(media_obj, "videoProfile", "") or "").lower()
+                hdr = hdr_from_name(path) or (resolution >= 2160 and "10" in profile)
+                return {"path": path, "size": size, "hdr": bool(hdr)}
+            except Exception:
+                return {"path": "", "size": None, "hdr": False}
+
         def get_media_resolution_info(media):
             try:
                 if not media or not getattr(media, "media", None):
@@ -140,17 +188,17 @@ def my_dashboard():
             except Exception:
                 return None, None, None
 
-        def get_show_first_episode_info(show):
+        def get_show_first_episode(show):
             try:
                 for season in show.seasons():
                     episodes = season.episodes()
                     if episodes:
-                        return get_media_resolution_info(episodes[0])
+                        return episodes[0]
             except Exception:
                 pass
-            return None, None, None
+            return None
 
-        def process_media_items(section, limit=0):
+        def process_media_items(section, limit=0, collect_codecs=True):
             nonlocal total_items, total_movies, total_shows
 
             stream_results = []
@@ -176,11 +224,14 @@ def my_dashboard():
                     }
 
                     resolution, codec, bitrate = None, None, None
+                    file_media = None
 
                     if section.type == "movie":
+                        file_media = media
                         resolution, codec, bitrate = get_media_resolution_info(media)
                     elif section.type == "show":
-                        resolution, codec, bitrate = get_show_first_episode_info(media)
+                        file_media = get_show_first_episode(media)
+                        resolution, codec, bitrate = get_media_resolution_info(file_media)
 
                     stream_avail, purchase_avail = {}, {}
                     tmdb_id, tmdb_total_episodes = None, None
@@ -256,6 +307,29 @@ def my_dashboard():
                         "episodes_missing": episodes_missing if section.type == "show" else False,
                         "episodes_missing_count": missing_count if section.type == "show" else None,
                     }
+
+                    if collect_codecs and codec and file_media is not None:
+                        finfo = get_file_info(file_media)
+                        size = finfo["size"]
+                        leaf = plex_episode_count if section.type == "show" else None
+                        if size and isinstance(leaf, int) and leaf > 1:
+                            size *= leaf  # estimation : 1er épisode x nombre d'épisodes
+                        alt_title = (getattr(media, "title", None) or "").strip()
+                        codec_items.append({
+                            "title": title,
+                            "alt_title": alt_title if alt_title and alt_title != title else None,
+                            "year": year,
+                            "type": section.type,
+                            "lib": section.title,
+                            "guid": getattr(media, "guid", None),
+                            "codec": codec,
+                            "resolution": resolution,
+                            "bitrate": bitrate,
+                            "size": size,
+                            "hdr": finfo["hdr"],
+                            "source_tag": source_tag_from_path(finfo["path"], source_tags),
+                            "streams": sorted(stream_avail.keys()) if stream_avail else [],
+                        })
 
                     if stream_avail:
                         stream_item_data = item_data.copy()
@@ -341,7 +415,7 @@ def my_dashboard():
                     pass
 
         if watchlist_section and tmdb_configured:
-            stream_results, _ = process_media_items(watchlist_section, limit=100)
+            stream_results, _ = process_media_items(watchlist_section, limit=100, collect_codecs=False)
             watchlist_items = stream_results
 
         stats = build_stats_context(
@@ -358,12 +432,14 @@ def my_dashboard():
             show_genre_counter=show_genre_counter
         )
 
-        save_cache(cache_key, {
+        data = {
             "results_stream": results_stream_by_lib,
             "results_purchase": results_purchase_by_lib,
             "watchlist_items": watchlist_items,
-            "stats": stats
-        })
+            "stats": stats,
+            "codec_items": codec_items,
+        }
+        save_cache(cache_key, data)
 
         return render_template(
             "my_dashboard.html",
@@ -371,7 +447,8 @@ def my_dashboard():
             results_stream=results_stream_by_lib,
             results_purchase=results_purchase_by_lib,
             watchlist_items=watchlist_items,
-            stats=stats
+            stats=stats,
+            codec=_codec_context(data),
         )
 
     except Exception as e:
@@ -403,6 +480,27 @@ def my_dashboard_cancel():
         _analysis_cancel.set()
         return jsonify({"success": True, "message": "Annulation demandée."})
     return jsonify({"success": False, "message": "Aucune analyse en cours."}), 400
+
+
+@my_dashboard_bp.route("/my_dashboard/codec_skip", methods=["POST"])
+def codec_skip():
+    if not session.get("logged_in"):
+        return jsonify({"success": False}), 401
+    data = request.json or {}
+    key = str(data.get("key") or "")[:300]
+    action = data.get("action")
+    if not key or action not in ("checked", "ignored", "clear"):
+        return jsonify({"success": False, "message": "Requête invalide."}), 400
+    set_skip(key, action, sig=str(data.get("sig") or "")[:40], confirmed=data.get("level") == "confirmed")
+    return jsonify({"success": True})
+
+
+@my_dashboard_bp.route("/my_dashboard/codec_services", methods=["POST"])
+def codec_services():
+    if not session.get("logged_in"):
+        return jsonify({"success": False}), 401
+    saved = save_services_config(request.json or {})
+    return jsonify({"success": True, "config": saved})
 
 
 @my_dashboard_bp.route("/search_tmdb", methods=["POST"])
