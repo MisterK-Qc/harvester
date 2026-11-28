@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
     "max_codec": "av1",
     "services": [
         {"tag": "NF",   "name": "Netflix",            "tmdb_names": ["Netflix"],
-         "codecs": ["h264", "hevc", "vp9", "av1"], "hdr_codecs": ["hevc"],
+         "codecs": ["h264", "hevc", "vp9", "av1"], "hdr_codecs": ["hevc", "av1"],
          "bitrates": {"hevc": 1550, "av1": 3772}},
         {"tag": "AMZN", "name": "Amazon Prime Video", "tmdb_names": ["Amazon Prime Video", "Amazon Video"],
          "codecs": ["h264", "hevc", "av1"],        "hdr_codecs": ["hevc"]},
@@ -118,6 +118,17 @@ def res_from_name(name: str) -> int | None:
 
 def hdr_from_name(name: str) -> bool:
     return bool(_HDR_RE.search(name or ""))
+
+
+_DV_RE = re.compile(r"(?i)(?<![a-z0-9])(?:dv|dovi|dolby[ ._-]?vision)(?![a-z0-9])")
+
+# Le Dolby Vision n'est offert qu'en HEVC par les services : un fichier DV n'est
+# jamais proposé dans un autre codec (l'AV1 HDR10 ferait perdre le DV).
+DV_CODECS = {"hevc"}
+
+
+def dv_from_name(name: str) -> bool:
+    return bool(_DV_RE.search(name or ""))
 
 
 def source_tag_from_path(path: str, tags) -> str | None:
@@ -291,7 +302,9 @@ def _ftp_lookup(ftp_ids):
             codec = codec_from_release_name(name) or codec_from_release_name(it.get("path") or "")
             if not codec:
                 continue
-            entry = (it.get("year"), codec, hdr_from_name(it.get("path") or name), it.get("size"), name,
+            e_path = it.get("path") or name
+            e_hdr = "dv" if dv_from_name(e_path) else hdr_from_name(e_path)
+            entry = (it.get("year"), codec, e_hdr, it.get("size"), name,
                      res_from_name(name) or res_from_name(it.get("path") or ""))
             mt = it.get("media_type")
             if mt == "episode":
@@ -450,6 +463,7 @@ def compute_upgrades(items, ftp_ids=None):
         if not cur_rank:
             continue
         hdr = bool(item.get("hdr"))
+        dv = bool(item.get("dv"))
 
         size = item.get("size")
 
@@ -459,6 +473,8 @@ def compute_upgrades(items, ftp_ids=None):
         better = {}
         for s in services:
             allowed = s.get("hdr_codecs", []) if hdr else s.get("codecs", [])
+            if dv:
+                allowed = [c for c in allowed if c in DV_CODECS]
             allowed = sorted((c for c in allowed if cur_rank < codec_rank(c) <= max_rank),
                              key=codec_rank, reverse=True)
             for c in allowed:
@@ -479,7 +495,7 @@ def compute_upgrades(items, ftp_ids=None):
         for (_, codec, e_hdr, e_size, name, e_res) in _ftp_evidence(item, movies, series):
             if item.get("type") != "show" and size and e_size and e_size >= size:
                 continue  # release plus grosse que le fichier actuel : aucun gain
-            if cur_rank < codec_rank(codec) <= max_rank and (e_hdr or not hdr) and res_ok(e_res):
+            if cur_rank < codec_rank(codec) <= max_rank and (e_hdr == "dv" if dv else (e_hdr or not hdr)) and res_ok(e_res):
                 evidence.append({"src": "ftp", "codec": codec, "label": name, "size": e_size})
         if not hdr and item.get("guid"):
             for codec, e_res, server in friends.get(item["guid"], []):
@@ -553,6 +569,7 @@ def compute_upgrades(items, ftp_ids=None):
             "codec": cur,
             "resolution": item.get("resolution"),
             "hdr": hdr,
+            "dv": dv,
             "size": size,
             "size_h": _human(size),
             "estimated": basis != "real",

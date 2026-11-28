@@ -10,7 +10,7 @@ from ..services.stats_service import normalize_genre, parse_resolution, build_em
 from ..services.cache_service import load_cache, save_cache, is_cache_valid
 from ..services.plex_token_service import get_plex_token
 from ..services.codec_upgrade_service import (
-    compute_upgrades, hdr_from_name, source_tag_from_path, load_services_config,
+    compute_upgrades, hdr_from_name, dv_from_name, source_tag_from_path, load_services_config,
     save_services_config, set_skip,
 )
 
@@ -172,10 +172,11 @@ def my_dashboard():
                 resolution = parse_resolution(media_obj.videoResolution) or 0
                 profile = (getattr(media_obj, "videoProfile", "") or "").lower()
                 hdr = hdr_from_name(path) or (resolution >= 2160 and "10" in profile)
+                dv = dv_from_name(path)
                 duration = int(getattr(media_obj, "duration", 0) or 0) or None
-                return {"path": path, "size": size, "hdr": bool(hdr), "duration": duration}
+                return {"path": path, "size": size, "hdr": bool(hdr), "dv": dv, "duration": duration}
             except Exception:
-                return {"path": "", "size": None, "hdr": False, "duration": None}
+                return {"path": "", "size": None, "hdr": False, "dv": False, "duration": None}
 
         def get_media_resolution_info(media):
             try:
@@ -332,6 +333,7 @@ def my_dashboard():
                             "size": size,
                             "duration": duration,
                             "hdr": finfo["hdr"],
+                            "dv": finfo["dv"],
                             "source_tag": source_tag_from_path(finfo["path"], source_tags),
                             "streams": sorted(stream_avail.keys()) if stream_avail else [],
                         })

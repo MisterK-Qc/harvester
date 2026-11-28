@@ -225,7 +225,7 @@
               <td>
                 <span class="badge codec badge-{{ r.codec }}">{{ r.codec | upper }}</span>
                 {% if r.resolution %}{{ r.resolution }}p{% endif %}
-                {% if r.hdr %}<span class="badge">HDR</span>{% endif %}
+                {% if r.dv %}<span class="badge">DV</span>{% elif r.hdr %}<span class="badge">HDR</span>{% endif %}
                 {% if r.source_tag %}<span class="badge">{{ r.source_tag }}</span>{% endif %}
                 <br><span class="codec-via">{{ r.size_h }}{% if r.type == "show" %} ≈{% endif %}</span>
               </td>
@@ -266,7 +266,7 @@
             <tr>
               <th>{{ t("codec.th_service") }}</th>
               {% for c in codec.all_codecs %}<th>{{ c | upper }}</th>{% endfor %}
-              {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>HDR/DV</small></th>{% endfor %}
+              {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>HDR10</small></th>{% endfor %}
               {% for c in codec.all_codecs %}<th>{{ c | upper }}<br><small>kbps 1080p</small></th>{% endfor %}
             </tr>
           </thead>
